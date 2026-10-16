@@ -125,3 +125,44 @@ def test_from_service_wraps_network_error(tmp_path, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", boom)
     with pytest.raises(RuntimeError, match="unreachable"):
         decompose.from_service(img, "http://svc:8000", tmp_path / "w")
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_client_timeout_environment_is_validated(tmp_path, monkeypatch, value):
+    img = tmp_path / "hero.png"
+    img.write_bytes(b"IMG")
+    monkeypatch.setenv("IMAGE2LIVE2D_DECOMPOSE_TIMEOUT", value)
+    with pytest.raises(ValueError, match="positive and finite"):
+        decompose.from_service(img, "http://svc:8000", tmp_path / "w")
+
+
+def test_client_keeps_error_code_without_retrying_oom(tmp_path, monkeypatch):
+    img = tmp_path / "hero.png"
+    img.write_bytes(b"IMG")
+    submitted = []
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            submitted.append(True)
+            return _FakeResp(b'{"job_id":"J"}')
+        return _FakeResp(b'{"status":"error","error_code":"cuda_oom","error":"GPU exhausted"}')
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match=r"\[cuda_oom\].*GPU exhausted"):
+        decompose.from_service(img, "http://svc:8000", tmp_path / "w", poll_interval=0)
+    assert len(submitted) == 1
+
+
+def test_client_timeout_counts_http_elapsed_time(tmp_path, monkeypatch):
+    img = tmp_path / "hero.png"
+    img.write_bytes(b"IMG")
+    clock = [0.0]
+    monkeypatch.setattr("time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("time.sleep", lambda duration: None)
+    monkeypatch.setenv("IMAGE2LIVE2D_DECOMPOSE_TIMEOUT", "1")
+    def fake_urlopen(req, timeout=None):
+        if req.method == "POST":
+            return _FakeResp(b'{"job_id":"J"}')
+        clock[0] += 2
+        return _FakeResp(b'{"status":"running"}')
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(RuntimeError, match="timed out after 1s"):
+        decompose.from_service(img, "http://svc:8000", tmp_path / "w", poll_interval=0)

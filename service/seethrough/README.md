@@ -1,9 +1,8 @@
 # See-through decompose service
 
 A standalone GPU HTTP service that wraps [See-through](https://github.com/shitagaki-lab/see-through):
-`POST /decompose` an image → get a layered `.psd`. The image2live2d client
-(`decompose.from_service`) turns that into a rig. Full GCP setup (provisioning, GPU choice, cost vs the
-$300 free credit, security) is in **[../../docs/DECOMPOSE_SERVICE.md](../../docs/DECOMPOSE_SERVICE.md)**.
+`POST /decompose` an image → poll the job → download a layered `.psd`. The image2live2d client
+(`decompose.from_service`) turns that into a rig. See [Windows setup](../../README.windows.md).
 
 ## Files
 - `app.py` — the FastAPI service (shells out to See-through's `inference_psd.py`)
@@ -23,7 +22,23 @@ SEE_THROUGH_DIR=/opt/see-through uvicorn app:app --host 0.0.0.0 --port 8000
 
 ## Endpoints
 - `GET /health` → `{"ok": true, ...}`
-- `POST /decompose` (raw image bytes; optional `X-Auth-Token`) → `.psd` bytes
+- `POST /decompose` (raw image bytes; optional `X-Auth-Token`) → HTTP 202 with `job_id`
+- `GET /jobs/{id}` → status, telemetry, error code
+- `GET /jobs/{id}/result` → completed `.psd` bytes
 
-Notes: single GPU ⇒ requests are serialized; first call downloads weights (~10–15 GB) and is slow.
+Notes: single GPU ⇒ one active request; additional requests receive HTTP 429. Install models first.
 Set `SEE_THROUGH_TOKEN` to require auth. Don't expose the port to `0.0.0.0/0` — restrict to your IP.
+
+## Memory profile and diagnostics
+
+See [MEMORY.md](MEMORY.md) for the pinned-source analysis, staged BF16 loading,
+structured telemetry, failure codes, and RTX 4060 validation limits.
+`SEE_THROUGH_TIMEOUT` defaults to 900 seconds for the entire subprocess workflow;
+`SEE_THROUGH_MEMORY_PROFILE` defaults to `staged` (`legacy` retains the original CLI).
+Use one Uvicorn worker. Copy **all `service/seethrough/*.py` files** together for a VM
+installation; the Dockerfile does this automatically. The adapter targets the Dockerfile's
+pinned upstream revision, so pin that revision for manual installs too.
+
+The current API is asynchronous: POST `/decompose` returns HTTP 202 with `job_id`,
+GET `/jobs/{id}` returns status/telemetry/error_code, and GET `/jobs/{id}/result`
+streams the completed PSD. A busy GPU returns HTTP 429 before reading another upload.

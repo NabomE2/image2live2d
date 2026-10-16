@@ -72,7 +72,7 @@ pip install fastapi "uvicorn[standard]"
 # 3. Drop the service app (uploaded separately via `gcloud compute scp`, or fetched here)
 #    Expecting /opt/app.py to exist (scp it before/after boot). If absent, warn and exit.
 if [ ! -f /opt/app.py ]; then
-  echo "WARNING: /opt/app.py not found — scp service/seethrough/app.py to the VM at /opt/app.py"
+  echo "WARNING: /opt/app.py not found — copy service/seethrough/*.py to the VM under /opt/"
 fi
 
 # 4. systemd unit so the service survives reboots

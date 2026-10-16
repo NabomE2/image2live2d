@@ -431,7 +431,7 @@ def from_service(
     *,
     role_map: RoleMapper = role_from_layer_name,
     token: str | None = None,
-    timeout: float = 1800.0,
+    timeout: float | None = None,
     poll_interval: float = 5.0,
 ) -> LayerStack:
     """Decompose a single flat image via a remote See-through service, into a ``LayerStack``.
@@ -443,6 +443,8 @@ def from_service(
     ``token`` sets ``X-Auth-Token`` if required. Requires the ``decompose`` extra (psd-tools + Pillow).
     """
     import json
+    import math
+    import os
     import time
     import urllib.error
     import urllib.request
@@ -472,6 +474,10 @@ def from_service(
             raise RuntimeError(f"decompose service connection error: {exc}") from exc
         return json.loads(body) if want_json else body
 
+    if timeout is None:
+        timeout = float(os.environ.get("IMAGE2LIVE2D_DECOMPOSE_TIMEOUT", "1800"))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("decompose timeout must be positive and finite")
     img_bytes = image_path.read_bytes()
 
     def _retryable(exc: Exception) -> bool:
@@ -485,15 +491,17 @@ def from_service(
     def _run_once() -> bytes:
         # submit (short request) -> poll (each poll short, survives long inference behind NAT) -> result
         job_id = _get("/decompose", data=img_bytes, want_json=True, t=120.0)["job_id"]
-        waited = 0.0
-        while waited < timeout:
-            time.sleep(poll_interval)
-            waited += poll_interval
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
             status = _get(f"/jobs/{job_id}", want_json=True, t=30.0)
             if status["status"] == "done":
                 break
             if status["status"] == "error":
-                raise RuntimeError(f"decompose failed on the service: {status.get('error')}")
+                raise RuntimeError(
+                    f"decompose failed on the service [{status.get('error_code') or 'inference_failed'}]: "
+                    f"{status.get('error')}"
+                )
         else:
             raise RuntimeError(f"decompose timed out after {timeout:.0f}s (job {job_id})")
         return _get(f"/jobs/{job_id}/result", want_json=False, t=180.0)

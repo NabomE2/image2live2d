@@ -5,13 +5,9 @@ See-through **once** and reuses it across requests. That removes, per request: P
 startup, the (heavy) See-through/torch/diffusers import, and CUDA context init. Weights stay
 disk-cached and the process keeps the GPU context warm.
 
-Honest scope note: See-through's `apply_layerdiff()` / `apply_marigold()` load their diffusion models
-**internally on each call** and expose no "load once" entry point (verified from the repo). So keeping
-the models **resident in VRAM** across requests needs a small patch to See-through's
-`utils/inference_utils.py` to hoist pipeline construction — see `warm_models()` below. Without that
-patch this worker still wins (no process/import/CUDA-init per call); with it, you also skip model
-reload. The whole thing is guarded: if the in-process path raises (e.g. an API mismatch), `app.py`
-falls back to the subprocess path, so the service never hard-fails.
+Legacy adapter only: the pinned upstream caches both pipelines as module globals, so an
+in-process worker can retain both models indefinitely. The staged profile disables this adapter.
+Its older keyword API is best-effort and can fall back to the subprocess path.
 
 The exact `apply_*` keyword names were read from `inference_psd.py`; treat them as best-effort and
 confirm against the installed repo. `infer()` raises `WarmUnavailable` on any mismatch so the caller
@@ -67,17 +63,7 @@ class WarmPipeline:
         self._loaded = True
 
     def warm_models(self) -> None:
-        """Hook to make the diffusion models **resident in VRAM** across requests.
-
-        See-through doesn't expose load-once builders, so this is a no-op by default. To enable full
-        residency, add (in your fork of see-through) factory functions that build the LayerDiff and
-        Marigold pipelines and cache them as module globals, then construct them here, e.g.::
-
-            self._layerdiff = self._iu.build_layerdiff(LAYERDIFF_REPO).to("cuda")
-            self._marigold  = self._iu.build_marigold(MARIGOLD_REPO).to("cuda")
-
-        and pass them into the apply_* calls in `infer()`. Documented in docs/DECOMPOSE_SERVICE.md.
-        """
+        """Legacy no-op; upstream loads and caches its models on the first call."""
         return
 
     def infer(self, image_path: str | os.PathLike, out_dir: str | os.PathLike) -> Path:
