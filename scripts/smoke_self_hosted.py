@@ -37,4 +37,14 @@ while True:
     time.sleep(0.5)
 assert result['status'] == 'done', result
 assert request('/api/jobs/' + job + '/download').startswith(b'TRNSRTS')
-print('PASS: health, readiness, ZIP conversion and .inp download')
+status = json.loads(request('/api/jobs/' + job + '/live2d-status'))
+assert status['ready'] and status['vtube_studio'] == 'unverified'
+with zipfile.ZipFile(io.BytesIO(request('/api/jobs/' + job + '/live2d-download'))) as archive:
+    assert archive.testzip() is None
+    manifest = json.loads(archive.read('model/model.model3.json'))
+    refs = manifest['FileReferences']
+    assert archive.read('model/' + refs['Moc']).startswith(b'MOC3')
+    for texture in refs['Textures']:
+        assert archive.read('model/' + texture).startswith(b'\x89PNG')
+    assert archive.read('model/' + refs['Physics'])
+print('PASS: health, readiness, ZIP conversion, .inp and complete Live2D ZIP download')

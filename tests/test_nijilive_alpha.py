@@ -26,8 +26,25 @@ def _emit_texture(tmp_path, source):
     # Re-exporting the same rig must not multiply alpha a second time or mutate the art.
     assert emitter.emit(rig, out.parent).read_bytes() == first
     assert path.read_bytes() == original
+    # Complete Live2D export requires every real texture, not placeholder art.
+    other = tmp_path / rig.textures[1].path
+    Image.new("RGBA", (1, 1), (20, 30, 40, 255)).save(other)
     bundle = Live2DEmitter(asset_root=tmp_path).build(rig, tmp_path / "live2d")
-    assert (bundle.model3_path.parent / "textures/000_tex_face.png").read_bytes() == original
+    # The first crop is packed at (2, 2) without scaling. Live2D's atlas must keep
+    # straight-alpha colors; only the .inp renderer uses premultiplied alpha.
+    with Image.open(bundle.model3_path.parent / "textures/atlas.png") as atlas:
+        bbox = source.convert("RGBA").getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox()
+        assert bbox is not None
+        crop = source.convert("RGBA").crop(bbox)
+        actual = atlas.crop((2, 2, 2 + crop.width, 2 + crop.height))
+        # RGB in fully transparent pixels is not significant after compositing.
+        for x in range(crop.width):
+            expected = crop.getpixel((x, 0))
+            pixel = actual.getpixel((x, 0))
+            assert pixel[3] == expected[3]
+            if expected[3]:
+                assert pixel == expected
+    assert path.read_bytes() == original
     with Image.open(BytesIO(InpFile.read(out).textures[0].data)) as embedded:
         return embedded.convert("RGBA")
 

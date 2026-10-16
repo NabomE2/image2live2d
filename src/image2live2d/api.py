@@ -1,12 +1,11 @@
 """Public API — the stable, documented entry points for converting layered art to a model.
 
 These wrap the pipeline (decompose seam → mesh → rig → physics → motion → IRR → emit) behind a few
-small functions so callers never touch internals. Two inputs are supported today (Tier 1, clean
-license): a **labeled layer directory** (``{order}_{role}.png``) and a **PSD** (e.g. See-through
-output). Both produce a nijilive ``.inp`` (Route B) and/or a Live2D bundle (Route A, JSON-only until a
-``.moc3`` template is supplied).
-
-Single flat-image input (Tier 2) is gated on a clean-license decomposer — see ``docs/PHASE5_PLAN.md``.
+small functions so callers never touch internals. Local inputs include
+a **labeled layer directory** (``{order}_{role}.png``) and a **PSD** (e.g. See-through
+output). Live2D export writes a complete, structurally validated bundle and ZIP.
+Flat images use ``convert_image`` with a separately configured See-through service.
+Official Cubism Core and VTube Studio behavior remains unverified.
 
 Example::
 
@@ -37,6 +36,7 @@ class ConversionResult:
     inp_path: Path | None
     live2d_path: Path | None
     qa: RigReport
+    live2d_zip_path: Path | None = None
 
     @property
     def passed(self) -> bool:
@@ -98,16 +98,43 @@ def convert_stack(
     return _emit(rig_from_stack(stack, name=name), out_dir, asset_root=Path(asset_root), live2d=live2d)
 
 
+def convert_image(
+    image_path: str | Path,
+    out_dir: str | Path,
+    *,
+    service_url: str,
+    token: str | None = None,
+    name: str | None = None,
+    live2d: bool = True,
+) -> ConversionResult:
+    """Decompose an image on a CUDA service, then rig and export locally.
+
+    The caller supplies a service and artwork they are authorized to use.
+    This function neither downloads nor redistributes third-party weights.
+    """
+    from .backends.live2d.bundle import safe_model_name
+
+    image_path = Path(image_path)
+    name = safe_model_name(name or image_path.stem)
+    work = Path(out_dir) / f"{name}_layers"
+    stack = decompose.from_service(image_path, service_url, work, token=token)
+    return convert_stack(stack, out_dir, name=name, asset_root=work, live2d=live2d)
+
+
 def _emit(rig: Rig, out_dir: str | Path, *, asset_root: Path, live2d: bool) -> ConversionResult:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     inp_path = NijiliveEmitter(asset_root=asset_root).emit(rig, out)
 
     live2d_path: Path | None = None
+    live2d_zip_path: Path | None = None
     if live2d:
         from .backends.live2d import Live2DEmitter  # local import: keep API import light
+        from .backends.live2d.bundle import safe_model_name, write_bundle_zip
 
-        live2d_path = Live2DEmitter(asset_root=asset_root).build(rig, out / f"{rig.meta.name}_live2d").model3_path
+        directory = out / f"{safe_model_name(rig.meta.name)}_live2d"
+        live2d_path = Live2DEmitter(asset_root=asset_root).build(rig, directory).model3_path
+        live2d_zip_path = write_bundle_zip(live2d_path)
 
     return ConversionResult(
         name=rig.meta.name,
@@ -115,4 +142,5 @@ def _emit(rig: Rig, out_dir: str | Path, *, asset_root: Path, live2d: bool) -> C
         inp_path=inp_path,
         live2d_path=live2d_path,
         qa=evaluate(rig, rig.meta.name),
+        live2d_zip_path=live2d_zip_path,
     )

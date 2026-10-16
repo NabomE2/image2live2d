@@ -132,8 +132,10 @@ class _Job:
     params: object = None
     physics: object = None
     anims: object = None
+    rig: object = None
     inp_bytes: bytes = b""
     source: bytes = b""
+    live2d_lock: object = field(default_factory=threading.Lock)
 
     def public(self) -> dict:
         return {
@@ -417,6 +419,7 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
             part_deformers=ctx["auth"].part_deformers,
         )
         ctx["rig"] = rig
+        job.rig = rig
         out = work / "out"
         inp = NijiliveEmitter().emit(rig, out)
         job.inp_bytes = Path(inp).read_bytes()
@@ -570,52 +573,31 @@ def rig_json(job: _Job) -> dict:
 
 
 def live2d_bundle_dir(job: "_Job") -> Path | None:
+    with job.live2d_lock:
+        return _build_live2d_bundle(job)
+
+
+def _build_live2d_bundle(job: "_Job") -> Path | None:
     """Build (once) a complete Live2D bundle (.moc3 + model3/physics3/cdi3/motion3 + real textures)
     from the job's rig and return its directory. Serves the Route-A render panel so the actual
     generated .moc3 can be loaded by a real Cubism runtime in the browser (A/B vs the .inp preview)."""
-    if job.work is None or job.stack is None or job.params is None or job.meshes is None:
+    if (job.status != "done" or job.work is None or job.stack is None
+            or job.params is None or job.meshes is None):
         return None
     out = Path(job.work) / "live2d"
     model3 = out / "model.model3.json"
     if model3.is_file():
+        from ..backends.live2d.bundle import validate_bundle
+        validate_bundle(model3)
         return out
-    import json as _json
-    from ..core.assemble import assemble_rig
-    from ..core import motion
-    from ..backends.live2d import model3 as _model3, physics3 as _physics3, cdi3 as _cdi3, motion3 as _motion3
-    from ..backends.live2d.moc3_binary import write_moc3
-    from ..backends.live2d.moc3_emit import build_atlas, rig_to_moc3
-    rig = assemble_rig(
-        name="model", source=None, stack=job.stack, meshes=job.meshes, deformers=[],
-        parameters=job.params, physics=job.physics or [],
-        animations=motion.generate_all(job.params, job.physics or []),
-    )
-    out.mkdir(parents=True, exist_ok=True)
-    (out / "textures").mkdir(exist_ok=True)
-    layers = Path(job.stack.layers[0].texture_path).parent   # decomposed layer PNGs
-
-    # single shared texture ATLAS + remapped UVs (real Live2D models use an atlas, not per-part
-    # textures; standard web runtimes/pixi-live2d-display need this to render our model correctly)
-    atlas_img, uv_remap = build_atlas(rig, layers)
-    atlas_img.save(out / "textures" / "atlas.png")
-    (out / "model.moc3").write_bytes(write_moc3(rig_to_moc3(rig, atlas_uv=uv_remap)))
-
-    def wj(rel, doc):
-        (out / rel).write_text(_json.dumps(doc, indent=2))
-    physics_file = None
-    if rig.physics:
-        physics_file = "model.physics3.json"
-        wj(physics_file, _physics3.physics3(rig))
-    cdi_file = "model.cdi3.json"
-    wj(cdi_file, _cdi3.cdi3(rig))
-    motions = {}
-    for anim in rig.animations:
-        rel = f"model.{anim.name}.motion3.json"
-        wj(rel, _motion3.motion3(anim))
-        motions.setdefault(anim.name.capitalize(), []).append(rel)
-    wj("model.model3.json", _model3.model3(
-        rig, moc="model.moc3", textures=["textures/atlas.png"], physics=physics_file,
-        display_info=cdi_file, motions=motions or None))
+    from ..backends.live2d import Live2DEmitter
+    rig = job.rig
+    if rig is None:
+        raise ValueError("Completed job has no assembled rig")
+    # Keep the existing preview URLs stable without changing the actual rig.
+    rig = rig.model_copy(update={"meta": rig.meta.model_copy(update={"name": "model"})})
+    layers = Path(job.stack.layers[0].texture_path).parent
+    Live2DEmitter(asset_root=layers).build(rig, out)
     return out
 
 
@@ -700,6 +682,30 @@ def _make_handler():
                     self.send_header("Content-Length", str(len(job.inp_bytes)))
                     self.end_headers()
                     self.wfile.write(job.inp_bytes)
+                    return
+                if sub in ("live2d-status", "live2d-download"):
+                    if job.status != "done":
+                        self._json(409, {"error": "Conversion has not completed"})
+                        return
+                    try:
+                        from ..backends.live2d.bundle import bundle_zip, safe_model_name
+                        bdir = live2d_bundle_dir(job)
+                        if bdir is None:
+                            raise ValueError("Live2D model is not ready")
+                        if sub == "live2d-status":
+                            self._json(200, {"ready": True, "structural_validation": "passed",
+                                             "cubism_core": "unverified", "vtube_studio": "unverified"})
+                        else:
+                            data = bundle_zip(bdir / "model.model3.json")
+                            self.send_response(200)
+                            self.send_header("Content-Type", "application/zip")
+                            filename = safe_model_name(job.name) + "_vtube.zip"
+                            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+                            self.send_header("Content-Length", str(len(data)))
+                            self.end_headers()
+                            self.wfile.write(data)
+                    except Exception as exc:
+                        self._json(422, {"error": f"Live2D export failed: {exc}"})
                     return
                 if sub == "source":
                     if not job.source:

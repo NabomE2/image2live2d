@@ -42,10 +42,18 @@ rendering.
 It's not portrait-only and it's not baked video: it's a **full-body, interactive rig** you can drive
 with lip-sync, motion capture, or a cursor.
 
+## Windows 11: PNG → VTube Studio model ZIP
+
+See [the Windows 11 / Docker Desktop / WSL2 guide (한국어)](README.windows.md) for
+GPU setup, PNG upload and ZIP download. Web, CLI and API now share the same
+complete Live2D exporter. Downloads pass structural checks; official Cubism Core
+and Windows VTube Studio compatibility are **unverified**. See [third-party terms](THIRD_PARTY.md)
+before using model weights or distributing outputs.
+
 ## Quick start
 
 ```bash
-pip install -e ".[decompose]"            # Pillow + psd-tools (PSD / layer input)
+pip install -e ".[app]"                  # Pillow + numpy + psd-tools (PSD / layer input)
 
 # a folder of {order}_{role}.png layers → animatable nijilive .inp
 python -m image2live2d path/to/layers -o character.inp
@@ -84,7 +92,7 @@ One rig, three standard targets — build it once, emit to whichever ecosystem y
 | Format | File(s) | Ecosystem | Status |
 | --- | --- | --- | --- |
 | **nijilive** | `.inp` | Opens directly in [nijigenerate](https://github.com/nijigenerate/nijigenerate) — open format, fully headless | ✅ **Mature** — the primary, fully-validated target |
-| **Live2D Cubism** | `.moc3` + `.model3.json` / `.physics3.json` / `.motion3.json` / `.cdi3.json` | Cubism Viewer, VTube Studio, standard Live2D runtimes | ✅ Codec **byte-for-byte validated** against 5 official models; renders with head-turn + hair physics. `.moc3` authoring is opt-in (see [Notes](#notes-on-the-live2d-targets)) |
+| **Live2D Cubism** | `.moc3` + `.model3.json` / `.physics3.json` / `.motion3.json` / `.cdi3.json` | Cubism Viewer, VTube Studio, standard Live2D runtimes | Complete export implemented; structural checks run. Official runtime / Windows VTube Studio **unverified** (see [Notes](#notes-on-the-live2d-targets)) |
 | **Cubism Editor** | `.cmo3` | Editable Cubism **project** — open, tweak, and re-export in Cubism Editor 5 | 🧪 Experimental — deformers + physics graph build; Editor-validation ongoing |
 
 Most tools that touch this space either target portraits only or export a *display* model you can't
@@ -186,10 +194,12 @@ tests/
 
 - The `.moc3` codec is **fully reverse-engineered and generated from scratch** — no Cubism template
   required — and is validated **byte-for-byte** against five official v3 models (round-trip + rebuild).
-  It renders a full character in Cubism Viewer 5.3 / VTube Studio with head-turn and hair physics.
-- The CLI's `--live2d` writes the **open JSON siblings** (`model3`/`physics3`/`motion3`/`cdi3`) by
-  default; these are MOC-independent and already drive any Live2D model. Authoring the closed `.moc3`
-  binary is an explicit opt-in — the remaining gate is *legal* (Live2D's SDK license), not technical.
+  Those are historical repository claims; this change has not independently verified the
+  official runtime or Windows VTube Studio behavior.
+- The CLI's `--live2d`, public API and web export use one complete exporter: `.moc3`,
+  texture atlas, JSON companions and a structurally validated ZIP. Missing artifacts fail export.
+  Official Cubism Core / Windows VTube Studio compatibility is **unverified** in this environment.
+  Review [third-party terms](THIRD_PARTY.md); no license clearance is implied.
 - `.cmo3` (editable Cubism **project**) is the newest target: the deformer + physics graph builds today;
   round-tripping through the proprietary Cubism Editor is still being hardened. See
   [`docs/CMO3_EDITOR_VALIDATION.md`](docs/CMO3_EDITOR_VALIDATION.md).
@@ -214,7 +224,7 @@ See-through and nijilive are independent projects and are not affiliated with th
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+pip install -e ".[dev,app]"
 python -m pytest -q
 ```
 
