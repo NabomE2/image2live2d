@@ -23,7 +23,7 @@ preprocess = ["rembg", "pillow", "numpy"]          # bg removal
 mesh = ["triangle", "numpy"]                        # auto-triangulation
 rig = ["numpy", "opencv-python"]                    # landmarks/pose/fit
 app = ["pillow", "psd-tools", "numpy"]                        # local web app: process PSD/layer uploads
-dev = ["pytest", "ruff", "mypy"]
+dev = ["pytest", "ruff", "mypy", "fastapi"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/image2live2d"]

@@ -128,3 +128,32 @@ print(result.live2d_path, result.live2d_zip_path)
 ```
 
 CLI ZIP은 지정한 Live2D 디렉터리 옆에 생성되며, API에서는 `live2d_zip_path`로 확인할 수 있습니다.
+
+## RTX 4060 8GB: 분리 중 메모리 부족 또는 900초 초과
+
+[병목 분석·로그 해석·검증 상태](service/seethrough/MEMORY.md)를 먼저 확인하세요.
+기본 `staged` 프로필은 분리/깊이/PSD 프로세스를 나누고 BF16 직접 로딩과 프롬프트 캐시 순서 조정으로 모델 동시 점유를 줄입니다. **실제 RTX 4060에서의 속도·8GB 적합성·출력 품질은 미검증**입니다. 해상도/추론 횟수는 자동으로 낮추지 않습니다.
+
+저장소 루트의 `.env`에 설정할 수 있습니다(기본값):
+
+```dotenv
+SEE_THROUGH_MEMORY_PROFILE=staged
+SEE_THROUGH_TIMEOUT=900
+SEE_THROUGH_CLIENT_TIMEOUT=1800
+```
+
+900초는 세 단계 전체의 제한이며 단계마다 새로 900초를 부여하지 않습니다. 기존에도 서비스 환경변수는 있었으나 이제 Compose에서 전달합니다. 클라이언트 제한은 폴링을 기다리는 별도 제한입니다. 로그에서 메모리가 안정적이고 정상 추론이 계속 진행됨을 확인한 경우에만 서버 제한을 조정하고, 클라이언트 제한은 서버보다 여유 있게 설정하세요. 기본 제한은 늘리지 않았습니다.
+
+WSL 터미널에서 변경된 서비스를 다시 빌드하고 로그를 저장합니다:
+
+```bash
+docker compose --profile gpu up -d --build
+docker compose logs -f seethrough
+# 실행이 끝난 뒤 파일로 저장
+docker compose logs --no-color seethrough > seethrough-run.log
+docker stats --no-stream
+```
+
+`cuda_oom`은 GPU 메모리 부족, `host_memory_exhausted`는 호스트 메모리 부족 근거가 있는 오류, `timeout`은 시간 제한입니다. 원인 불명 강제 종료는 `process_killed`로 표시합니다. 같은 GPU에서 다른 생성형 AI 프로그램을 함께 실행하지 말고, Docker/WSL에 Windows의 RAM 32GB 전부를 할당하지 마세요. CPU offload나 swap 증가는 VRAM 부족을 RAM/디스크 지연으로 옮길 수 있으므로 로그 없이 해결책으로 적용하지 마세요.
+
+브라우저 PNG 업로드 → 분리/리깅 → VTube Studio용 ZIP 다운로드 흐름은 동일합니다. 이미 처리 중이면 새 업로드는 HTTP 429로 거절하므로 현재 작업 완료 후 다시 시도하세요.
