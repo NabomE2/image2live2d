@@ -74,8 +74,8 @@ def main(argv: list[str] | None = None) -> int:
         nargs="?",
         const="",
         metavar="DIR",
-        help="also emit a Live2D (Route A) bundle into DIR (default ./<name>_live2d). JSON-only "
-        "(model3/physics3/motion3/cdi3) until a .moc3 template is supplied — see docs/PHASE4_PLAN.md",
+        help="also emit a complete Live2D bundle into DIR (default ./<name>_live2d) and a "
+        "validated ZIP beside it; official runtime compatibility is unverified",
     )
     parser.add_argument(
         "--cmo3",
@@ -229,11 +229,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.live2d is not None:
         from .backends.live2d import Live2DEmitter
+        from .backends.live2d.bundle import safe_model_name, write_bundle_zip
 
-        l2d_dir = Path(args.live2d) if args.live2d else out.parent / f"{name}_live2d"
+        l2d_dir = Path(args.live2d) if args.live2d else out.parent / f"{safe_model_name(name)}_live2d"
         bundle = Live2DEmitter(asset_root=asset_root).build(rig, l2d_dir)
-        moc = "yes" if bundle.moc_written else "stub (needs a .moc3 template — see docs/PHASE4_PLAN.md)"
-        print(f"  wrote Live2D bundle -> {bundle.model3_path}  ({len(bundle.files)} files, moc3={moc})")
+        zip_path = write_bundle_zip(bundle.model3_path)
+        print(f"  wrote Live2D bundle -> {bundle.model3_path} ({len(bundle.files)} files)")
+        print(f"  ZIP -> {zip_path}; structural checks passed; Cubism Core/VTube Studio UNVERIFIED")
 
     if args.cmo3 is not None:
         from .backends.live2d.cmo3 import rig_to_cmo3

@@ -9,6 +9,7 @@ __version__ = "0.2.0"
 
 from .api import (
     ConversionResult,
+    convert_image,
     convert_layers,
     convert_psd,
     convert_stack,
@@ -19,6 +20,7 @@ from .api import (
 __all__ = [
     "__version__",
     "ConversionResult",
+    "convert_image",
     "convert_layers",
     "convert_psd",
     "convert_stack",

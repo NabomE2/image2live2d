@@ -1,7 +1,6 @@
 """Phase 4 (Route A) — open JSON emitters + gated .moc3 seam + bundle assembly.
 
-The .moc3 binary is gated, so these verify the four open JSON files map the IRR correctly and that a
-JSON-only bundle is well-formed (renderable once a .moc3 is supplied)."""
+Verify JSON mappings and complete binary bundles. Runtime-load proof is separate."""
 
 from __future__ import annotations
 
@@ -181,29 +180,40 @@ def test_moc3_seam_uses_injected_writer():
 # --------------------------------------------------------------------------------------------------
 # bundle assembly (JSON-only, no moc writer)
 # --------------------------------------------------------------------------------------------------
-def test_emitter_writes_json_only_bundle(tmp_path):
+def _textures(rig, root):
+    from PIL import Image
+    for tex in rig.textures:
+        Image.new("RGBA", (tex.width, tex.height), (100, 150, 200, 255)).save(root / tex.path)
+    return root
+
+
+def test_emitter_writes_complete_bundle(tmp_path):
+    from image2live2d.backends.live2d.bundle import validate_bundle
     rig = _rig("hero")
-    bundle = Live2DEmitter().build(rig, tmp_path)
-    assert bundle.moc_written is False
+    bundle = Live2DEmitter(asset_root=_textures(rig, tmp_path)).build(rig, tmp_path / "out")
+    assert bundle.moc_written
     assert bundle.model3_path.name == "hero.model3.json"
-    # the four open JSON files exist and parse
-    for rel in ("hero.model3.json", "hero.physics3.json", "hero.cdi3.json", "hero.idle.motion3.json"):
-        p = tmp_path / rel
-        assert p.is_file()
-        json.loads(p.read_text())
-    # textures written
-    assert list((tmp_path / "textures").glob("*.png"))
-    # model3 references resolve to real files (except the gated .moc3)
-    m = json.loads(bundle.model3_path.read_text())
-    refs = m["FileReferences"]
-    assert (tmp_path / refs["Physics"]).is_file()
-    for tex in refs["Textures"]:
-        assert (tmp_path / tex).is_file()
+    assert validate_bundle(bundle.model3_path) == bundle.files
+    refs = json.loads(bundle.model3_path.read_text())["FileReferences"]
+    assert refs["Textures"] == ["textures/atlas.png"]
+    assert (bundle.model3_path.parent / refs["Moc"]).read_bytes().startswith(b"MOC3")
 
 
 def test_emitter_writes_moc3_with_writer(tmp_path):
+    from image2live2d.backends.live2d.moc3_emit import native_moc_writer
     rig = _rig("hero")
-    em = Live2DEmitter(moc_writer=lambda r, t: b"MOC3FAKE", moc_template="tmpl.moc3")
-    bundle = em.build(rig, tmp_path)
-    assert bundle.moc_written is True
-    assert (tmp_path / "hero.moc3").read_bytes() == b"MOC3FAKE"
+    em = Live2DEmitter(asset_root=_textures(rig, tmp_path), moc_writer=native_moc_writer)
+    bundle = em.build(rig, tmp_path / "out")
+    assert bundle.moc_written
+    assert (bundle.model3_path.parent / "hero.moc3").read_bytes().startswith(b"MOC3")
+
+
+def test_emitter_rejects_missing_art_and_invalid_writer(tmp_path):
+    rig = _rig("hero")
+    with pytest.raises(ValueError, match="asset_root"):
+        Live2DEmitter().build(rig, tmp_path / "out")
+    with pytest.raises(ValueError, match="Missing Live2D texture"):
+        Live2DEmitter(asset_root=tmp_path).build(rig, tmp_path / "out")
+    em = Live2DEmitter(asset_root=_textures(rig, tmp_path), moc_writer=lambda r, t: b"MOC3FAKE")
+    with pytest.raises(ValueError):
+        em.build(rig, tmp_path / "out")

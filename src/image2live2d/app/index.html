@@ -111,6 +111,10 @@
       <h2>3 · Result</h2>
       <div class="kv" id="kv"></div>
       <a class="dl" id="dl"><button class="ghost">⬇ Download .inp</button></a>
+      <button id="dl-vtube" disabled>VTube Studio용 모델 다운로드</button>
+      <div class="hint" id="vtube-status" role="status" aria-live="polite"></div>
+      <div class="hint">공식 Cubism Core / VTube Studio 호환성: 미검증. 다운로드 ZIP 전체를 압축 해제하세요.
+      Windows에서는 브라우저 다운로드 목록(Ctrl+J)에서 파일 위치를 확인할 수 있습니다.</div>
     </div>
 
     <div class="card" id="previewcard" style="display:none">
@@ -128,7 +132,7 @@
       <div class="stage" id="cubismstage"><canvas id="cubism"></canvas><span class="ph" id="cubismph">click “Load Cubism render”</span></div>
       <div class="quick">
         <button id="loadCubism">▶ Load Cubism render</button>
-        <span class="hint" id="cubismhint">loads the official Cubism Core (the runtime VTube Studio uses) and renders the actual .moc3</span>
+        <span class="hint" id="cubismhint">Optional Cubism Core preview · VTube Studio import / tracking: UNVERIFIED</span>
       </div>
     </div>
   </div>
@@ -191,6 +195,7 @@ $('#run').addEventListener('click',async()=>{
     $('#uphint').textContent='Finish local GPU setup above before converting this image.';
     $('#setup-title').scrollIntoView({behavior:'smooth'}); return;
   }
+  $('#dl-vtube').disabled=true; $('#vtube-status').textContent='';
   $('#run').disabled=true; $('#resultcard').style.display='none'; $('#previewcard').style.display='none';
   $('#errbox').innerHTML='';
   const r=await fetch('/api/jobs?name='+encodeURIComponent(chosen.name),{method:'POST',body:chosen});
@@ -246,8 +251,46 @@ function onDone(j){
     '<div><b>'+(r.params||0)+'</b>params</div>'+
     '<div><b>'+(r.physics||0)+'</b>physics</div>'+notes;
   $('#dl').href='/api/jobs/'+jobId+'/download';
+  prepareVtube(jobId);
   loadLive();
 }
+
+async function prepareVtube(id){
+  $('#dl-vtube').disabled=true;
+  $('#vtube-status').textContent='Live2D 파일 생성 및 참조 검사 중…';
+  try{
+    const response=await fetch('/api/jobs/'+id+'/live2d-status');
+    const result=await response.json();
+    if(!response.ok || !result.ready) throw new Error(result.error||'Live2D export failed');
+    if(id!==jobId) return;
+    $('#dl-vtube').disabled=false;
+    $('#vtube-status').textContent='파일 구조 검사 통과 · 공식 런타임 호환성 미검증';
+  }catch(error){
+    if(id===jobId) $('#vtube-status').textContent='Live2D 생성 실패: '+error.message;
+  }
+}
+$('#dl-vtube').addEventListener('click',async()=>{
+  const id=jobId;
+  $('#dl-vtube').disabled=true;
+  try{
+    const response=await fetch('/api/jobs/'+id+'/live2d-download');
+    if(!response.ok){
+      const result=await response.json(); throw new Error(result.error||'Download failed');
+    }
+    const blob=await response.blob();
+    const header=response.headers.get('Content-Disposition')||'';
+    const filename=(header.match(/filename="([^"]+)"/)||[])[1]||'model_vtube.zip';
+    const url=URL.createObjectURL(blob), link=document.createElement('a');
+    link.href=url; link.download=filename; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    if(id===jobId){
+      $('#vtube-status').textContent=filename+' 다운로드 요청 완료. Ctrl+J → 폴더에서 표시';
+      $('#dl-vtube').disabled=false;
+    }
+  }catch(error){
+    if(id===jobId) $('#vtube-status').textContent='다운로드 실패: '+error.message;
+  }
+});
 
 // ====================  In-browser live runtime (nijilive-style)  ====================
 // Consumes the rig JSON (meshes + keyform offsets) + part textures and renders the puppet on a
@@ -607,7 +650,7 @@ async function loadCubism(){
     if(L2D.raf) cancelAnimationFrame(L2D.raf);
     L2D.t0=null; L2D.last=null;
     ph.style.display='none';
-    $('#cubismhint').textContent='OFFICIAL Cubism Core ('+n+' drawables, '+pids.length+' params) · what you see = what loads in VTube Studio';
+    $('#cubismhint').textContent='OFFICIAL Cubism Core ('+n+' drawables, '+pids.length+' params) · VTube Studio compatibility UNVERIFIED';
     CUBISM_VIS=true; cubismLoop();
     if('IntersectionObserver' in window){
       new IntersectionObserver(es=>{
