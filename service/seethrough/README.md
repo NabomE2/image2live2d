@@ -34,7 +34,7 @@ Set `SEE_THROUGH_TOKEN` to require auth. Don't expose the port to `0.0.0.0/0` �
 See [MEMORY.md](MEMORY.md) for the pinned-source analysis, staged BF16 loading,
 structured telemetry, failure codes, and RTX 4060 validation limits.
 `SEE_THROUGH_TIMEOUT` defaults to 900 seconds for the entire subprocess workflow;
-`SEE_THROUGH_MEMORY_PROFILE` defaults to `staged` (`legacy` retains the original CLI).
+`SEE_THROUGH_MEMORY_PROFILE` defaults to `staged` (`low_vram` opts into 768px/20-step LayerDiff with alternating UNet/VAE placement; `legacy` retains the original CLI).
 Use one Uvicorn worker. Copy **all `service/seethrough/*.py` files** together for a VM
 installation; the Dockerfile does this automatically. The adapter targets the Dockerfile's
 pinned upstream revision, so pin that revision for manual installs too.
@@ -42,3 +42,5 @@ pinned upstream revision, so pin that revision for manual installs too.
 The current API is asynchronous: POST `/decompose` returns HTTP 202 with `job_id`,
 GET `/jobs/{id}` returns status/telemetry/error_code, and GET `/jobs/{id}/result`
 streams the completed PSD. A busy GPU returns HTTP 429 before reading another upload.
+
+For RTX 4060 8GB, see the [low_vram configuration and validation guide](MEMORY.md#low_vram-rtx-4060-8gb를-위한-선택형-프로필). Real GPU fit, speed and quality remain **unverified**; staged stays the default.

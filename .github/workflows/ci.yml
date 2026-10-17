@@ -29,8 +29,8 @@ jobs:
           cache: pip
 
       # Editable install + the light optional deps the tests actually use (Pillow / numpy / psd-tools).
-      # The heavy ML extras (torch, opencv, rembg, triangle) are NOT installed: no test requires them —
-      # those code paths are gated seams that skip when the dep is absent.
+      # Heavy ML extras are absent here; tensor tests skip without torch/diffusers.
+      # The low-vram-cpu job below runs those contracts with CPU dependencies.
       - name: Install
         run: |
           python -m pip install --upgrade pip
@@ -54,3 +54,20 @@ jobs:
           cache: pip
       - run: pip install ruff
       - run: ruff check src tests
+
+  low-vram-cpu:
+    name: low_vram CPU tensor contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install CPU inference test dependencies
+        run: |
+          pip install -e ".[dev,app]"
+          pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          pip install diffusers==0.37.0
+      - name: Verify low_vram and staged contracts (no CUDA or weights)
+        run: python -m pytest -q -ra tests/test_low_vram.py tests/test_seethrough_memory.py

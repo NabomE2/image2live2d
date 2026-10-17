@@ -22,7 +22,7 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt && \
     pip install fastapi "uvicorn[standard]"
 
-COPY app.py pipeline.py model_manager.py process_runner.py staged_inference.py telemetry.py /opt/
+COPY app.py pipeline.py model_manager.py process_runner.py staged_inference.py low_vram.py telemetry.py /opt/
 COPY patches /opt/patches
 RUN python /opt/patches/guard_empty_head_crop.py common/utils/inference_utils.py && python /opt/patches/guard_missing_part_pngs.py common/utils/io_utils.py
 RUN useradd --create-home --uid 1000 app && mkdir /models && chown app:app /models

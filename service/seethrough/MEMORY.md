@@ -23,7 +23,7 @@ GPU 91%만으로 병목을 판정할 수 없습니다. VRAM 포화·공유 메�
 
 기존 seed 42, LayerDiff 1280/30 steps, 깊이 768/모델 기본 steps, 전처리·분리·PSD 경로와 출력 형식을 유지합니다. 기존 빈 머리/누락 PNG 보호 패치도 유지합니다. BF16은 원래 추론 정밀도이며 새 양자화가 아닙니다. 로딩 및 캐시 순서 변경의 수치적 동일성/품질은 실제 모델로 비교해야 합니다. 원본 PNG의 해상도나 알고리즘을 자동으로 낮추지 않습니다.
 
-CPU/group offload는 RAM 98% 상황에서 기본 적용하지 않았습니다. upstream group offload는 전체 CUDA 이동 **이후** 활성화되므로 로딩 피크도 해결하지 못합니다. 커스텀 파이프라인은 `unet.device`와 VAE 내부 메서드를 직접 사용하므로 일반 Diffusers offload hook을 그대로 적용하면 장치 불일치 위험이 있습니다. NF4, VAE tiling, step 감소는 품질 또는 동작 검증이 필요해 제외했습니다.
+기본 staged 프로필에서 CPU/group offload는 RAM 98% 상황을 고려해 적용하지 않았습니다. upstream group offload는 전체 CUDA 이동 **이후** 활성화되므로 로딩 피크도 해결하지 못합니다. 커스텀 파이프라인은 `unet.device`와 VAE 내부 메서드를 직접 사용하므로 일반 Diffusers offload hook을 그대로 적용하면 장치 불일치 위험이 있습니다. staged에서는 NF4, VAE tiling, step 감소를 적용하지 않습니다. 선택형 low_vram의 범위는 아래 별도 절을 참고하세요.
 
 `SEE_THROUGH_MEMORY_PROFILE=legacy` + `INFERENCE_MODE=subprocess`는 비교용 기존 단일 CLI 경로입니다. legacy warm은 기존 호환 어댑터이며 이 최적화/강제 deadline의 적용 대상이 아닙니다. Docker는 Uvicorn worker **1개**로 실행하세요. worker/컨테이너를 늘리면 프로세스별 락이 GPU 중복 로딩을 막지 못합니다.
 
@@ -59,3 +59,111 @@ RTX 4060에서는 같은 소유 PNG와 캐시된 같은 모델로 legacy/staged 
 5. 단일 추론 단계 OOM이 계속되면 해당 구간 로그를 기준으로 추가 offload를 설계해야 합니다. 현재 변경만으로 8GB 성공이나 속도 향상을 보장하지 않습니다.
 
 모델/SDK 배포와 라이선스는 변경하지 않습니다. `THIRD_PARTY.md`의 조건이 계속 적용됩니다. 공식 Cubism Core 및 VTube Studio 런타임 검증은 여전히 미검증입니다.
+
+## `low_vram`: RTX 4060 8GB를 위한 선택형 프로필
+
+**구현 및 CPU 회귀 검증 완료, 실제 RTX 4060 8GB 적합성·속도·최대 VRAM/RAM·품질은 미검증입니다.**
+기본값은 계속 `staged`입니다. `low_vram`은 해상도와 스텝 수를 줄이므로 같은 seed여도
+고품질 모드와 같은 결과를 보장하지 않습니다. OOM 시 자동으로 품질을 낮추는 fallback은 없습니다.
+
+| 설정/동작 | `staged` (기본 고품질) | `low_vram` |
+| --- | --- | --- |
+| LayerDiff 본체·머리 해상도 | 1280 | 768 |
+| LayerDiff 스텝 | 30 | 20 |
+| 깊이 해상도/스텝 | 768 / 모델 기본값 | 동일 |
+| seed / scheduler / BF16 | upstream seed 42 / 기존 scheduler / BF16 | 동일 |
+| 단계 격리 / 공유 timeout | LayerDiff → 깊이 → PSD / 900초 | 동일 |
+| LayerDiff 모델 배치 | UNet·VAE 동시 CUDA | 인코딩: SD VAE, denoise: UNet, 디코딩: SD VAE+투명도 decoder |
+| Attention / FF | upstream 동작 | SDPA / 최대 1024토큰씩 FF 처리 |
+| SD VAE | upstream 동작 | slicing + 512픽셀 overlap tiling |
+
+### 설정 및 실행
+
+저장소 루트 `.env`의 기존 항목을 수정하거나 다음 항목을 추가합니다:
+
+```dotenv
+SEE_THROUGH_MEMORY_PROFILE=low_vram
+SEE_THROUGH_TIMEOUT=900
+SEE_THROUGH_CLIENT_TIMEOUT=1800
+```
+
+WSL 터미널에서 새 어댑터를 포함하도록 이미지를 빌드하고 컨테이너를 재생성합니다.
+단순 `docker compose restart`는 변경된 환경변수를 적용하지 않습니다.
+
+```bash
+docker compose --profile gpu up -d --build
+# 실제 선택된 프로필 확인 (서비스 포트를 외부에 공개하지 않음)
+docker compose exec seethrough python -c "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8000/health')))"
+docker compose logs -f seethrough
+```
+
+`/health`의 `memory_profile`이 `low_vram`인지 확인한 뒤 모델 설치와 PNG 업로드를 진행합니다.
+`staged`로 복귀하려면 `.env`를 `SEE_THROUGH_MEMORY_PROFILE=staged`로 바꾸고 같은 `up -d` 명령을
+실행합니다. 모델 볼륨을 지울 필요는 없습니다. 일회성 실행은
+`SEE_THROUGH_MEMORY_PROFILE=low_vram ./start.sh --gpu`도 가능합니다.
+
+VM에서 직접 실행할 때는 모든 `service/seethrough/*.py`를 같은 디렉터리에 복사한 뒤,
+고정 upstream 및 모델이 설치된 환경에서 실행합니다:
+
+```bash
+SEE_THROUGH_MEMORY_PROFILE=low_vram SEE_THROUGH_DIR=/opt/see-through \
+  uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+서비스 프로세스에 기존 `RESOLUTION`이 설정되어 있으면 그 값이 768보다 우선합니다.
+기본 Compose는 `RESOLUTION`을 전달하지 않습니다. 768/20 프로필을 비교하려면 직접 설치의
+기존 `RESOLUTION` override를 해제하세요. 스텝은 low_vram에서 20으로 고정하고, 깊이 스텝과
+seed는 바꾸지 않습니다. `INFERENCE_MODE=warm`을 지정해도 이 프로필은 단계별 subprocess를 사용합니다.
+
+### 구현 범위와 비용
+
+`low_vram.py`는 고정 upstream CLI의 fullpage·batch=1·guidance=1 경로 전용입니다.
+지원하지 않는 인자는 조용히 무시하지 않고 오류로 처리합니다. 기존 빈 머리/누락 PNG 보호,
+본체·머리 분리 순서, 파츠 목록, PSD 저장과 리깅/Live2D 내보내기는 그대로 사용합니다.
+
+- 프롬프트를 캐시하고 인코더를 해제한 후에만 UNet을 올립니다. upstream의 초기 VAE CUDA
+  이동은 지연하여 첫 호출 전부터 동시 점유를 막습니다. CUDA generator와 seed를 유지합니다.
+- 각 전환에서 비활성 모델을 CPU로 옮긴 **다음** 필요한 모델을 CUDA로 옮깁니다.
+  UNet 가중치는 단계 사이 CPU RAM에 남으므로 VRAM 감소만큼 RAM·PCIe 전송 비용이 생깁니다.
+  이 방법은 호스트 RAM 부족을 해결하지 않습니다.
+- SDPA는 PyTorch가 지원하는 커널을 선택합니다. 모든 경우에 Flash Attention을 강제하거나
+  사용을 보장하지 않습니다. feed-forward는 토큰별 독립 연산만 청크 처리하며, 프레임 간
+  attention을 쪼개거나 13/11개 파츠를 버리지 않습니다.
+- SD VAE 인코딩/디코딩에 타일링을 적용합니다. **커스텀 투명도 decoder 자체는 타일링하지
+  않습니다.** 한 파츠씩 처리하고, 마지막 latent는 CPU에 둡니다. 타일 경계의 픽셀 차이는
+  실제 출력으로 확인해야 합니다.
+- 인코딩은 upstream의 `use_offset=False` 경로와 같은 VAE 분포 샘플을 사용하며,
+  계산해 놓고 버리던 투명도 offset은 생성하지 않습니다. denoise 임시 텐서는 루프마다
+  해제하고, 전체 conditioning은 디코딩 전에 함수 범위를 벗어나도록 분리합니다.
+- 깊이 모델은 기존 staged 방식 그대로 별도 프로세스에서 실행합니다. 이 변경의 세부
+  UNet/VAE 교대 배치와 FF 청크 최적화는 LayerDiff에 적용됩니다. 깊이 단계 OOM까지 해결했다는
+  의미는 아닙니다.
+
+로그의 `layerdiff.low_vram`은 SDPA·청크·타일 설정을, `layerdiff.placement`의 `models`는
+현재 CUDA에 배치한 모델을 표시합니다. 기존 5초 샘플 및 `cuda_oom`/`timeout` 분류는 유지합니다.
+시간 제한은 자동으로 늘리지 않습니다.
+
+### 재현 가능한 검증
+
+일반 개발 테스트와 별도로 실제 CPU PyTorch/Diffusers 연산 검증을 실행할 수 있습니다.
+CUDA Docker 환경에서는 이미 설치된 CUDA PyTorch를 CPU wheel로 교체하지 마세요.
+아래 CPU 설치 명령은 GPU 없는 별도 개발 가상환경용입니다.
+
+```bash
+pip install -e '.[dev,app]'
+pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+pip install diffusers==0.37.0
+python -m pytest -q -ra tests/test_low_vram.py tests/test_seethrough_memory.py
+python -m pytest -q -ra
+```
+
+테스트는 단계 배치 순서, 첫 CUDA 이동 지연, staged/legacy 명령 불변, 공유 deadline,
+warm 비활성화, 실제 SDPA/GEGLU, 나머지가 있는 FF 청크의 수치 일치, 본체 13/머리 11파츠,
+알파 마스크 및 20스텝 처리와 실제 PNG/PSD 어댑터 경로를 확인합니다.
+CPU 테스트는 모델 가중치나 CUDA 추론을 실행하지 않습니다. torch/diffusers가 없는 일반
+개발 환경에서는 해당 텐서 테스트를 명시적으로 skip합니다. 별도 CI job은 이 의존성을 설치합니다.
+
+RTX 4060에서는 동일 PNG·모델 revision·seed로 `staged`와 `low_vram`을 각각 최소 3회 측정하세요.
+다운로드와 첫 로딩을 구분하고, 본체/머리/깊이 시간, CUDA peak, RSS/cgroup peak,
+Windows 공유 GPU 메모리·RAM, 생성 PSD의 파츠·경계·알파 및 Live2D ZIP을 비교합니다.
+**실측 전에는 “8GB에서 성공” 또는 “몇 배 빨라짐”으로 해석하지 마세요.**
