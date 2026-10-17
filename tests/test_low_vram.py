@@ -67,6 +67,13 @@ def test_placement_evicts_before_loading_and_parks(low, monkeypatch):
         def __init__(self, name):
             self.name = name
 
+        def parameters(self):
+            return [SimpleNamespace(device=devices[self.name], dtype="bf16",
+                                    numel=lambda: 8, element_size=lambda: 2)]
+
+        def buffers(self):
+            return []
+
         def to(self, device, **kwargs):
             devices[self.name] = device
             events.append((self.name, device))
@@ -75,7 +82,8 @@ def test_placement_evicts_before_loading_and_parks(low, monkeypatch):
 
     pipe = SimpleNamespace(unet=Model("unet"), vae=Model("vae"),
                            trans_vae=SimpleNamespace(decoder=Model("decoder")))
-    torch = SimpleNamespace(bfloat16="bf16", cuda=SimpleNamespace(empty_cache=lambda: None))
+    torch = SimpleNamespace(bfloat16="bf16", cuda=SimpleNamespace(empty_cache=lambda: None,
+                                                                  is_initialized=lambda: False))
     monkeypatch.setattr(low, "emit", lambda *a, **k: None)
     placement = low.Placement(pipe, torch)
     # Body then head: the same weights must be reused and each cycle must evict.
@@ -178,6 +186,10 @@ def test_full_tensor_pipeline_preserves_frames_alpha_and_steps(low, monkeypatch,
     import numpy as np
 
     events = []
+    logs = []
+    metrics = importlib.import_module("low_vram_metrics")
+    monkeypatch.setattr(metrics, "emit", lambda stage, event, **kw: logs.append(
+        {"stage": stage, "event": event, **kw}))
     cpu = torch.device("cpu")
     dtype = torch.float32
 
@@ -251,5 +263,20 @@ def test_full_tensor_pipeline_preserves_frames_alpha_and_steps(low, monkeypatch,
     assert len(output.images) == len(output.vis_list) == frames
     assert events == [("vae",), ("unet",)] + ["step"] * 20 + [
         ("vae", "decoder")] + ["decode"] * frames + ["park"]
+    completed = [e for e in logs if e["stage"] == "layerdiff.step" and e["event"] == "end"]
+    assert [e["step"] for e in completed] == list(range(1, 21))
+    assert all(e["steps"] == 20 and e["group_index"] == group for e in completed)
+    assert completed[-1]["progress"] == 1.0
+    assert all(e["elapsed_seconds"] >= e["unet_seconds"] for e in completed)
+    starts = [e for e in logs if e["event"] == "start"]
+    for step in range(1, 21):
+        assert [e["stage"] for e in starts if e.get("step") == step] == [
+            "layerdiff.step", "layerdiff.step_prepare", "layerdiff.unet", "layerdiff.scheduler"]
+    transfers = [e for e in starts if e["stage"] == "layerdiff.tensor_transfer"]
+    assert {e["role"] for e in transfers} == {"encode_input", "condition_out", "condition_in",
+                                              "prompt_embeds", "pooled_embeds", "denoised_latents",
+                                              "alpha_mask", "decode_latent"}
+    assert sum(e["role"] == "decode_latent" for e in transfers) == frames
+    assert all("step" not in e for e in transfers)  # no adapter transfer inside the step loop
     with pytest.raises(ValueError, match="guidance=1"):
         low.infer(pipe, fullpage=page, prompt=["tag"], guidance_scale=5)
