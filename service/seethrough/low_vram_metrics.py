@@ -26,7 +26,9 @@ def span(torch, stage, **fields):
     try:
         synchronize(torch)
         ready = time.perf_counter()
+        emit(stage, "ready", **fields)
         yield result
+        emit(stage, "submitted", **fields)
         synchronize(torch)
     except BaseException:
         # In particular, don't synchronize again or mask OOM during unwinding.

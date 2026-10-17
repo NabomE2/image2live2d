@@ -1,5 +1,9 @@
 # low_vram LayerDiff timeout investigation
 
+This document records PR #4. Current block offload, partitioning and diagnostic
+semantics are documented in [FRAME_MEMORY.md](FRAME_MEMORY.md); they supersede
+the phase-only placement and start/end-only descriptions below.
+
 Base: image2live2d `167242f` (PR #3 merged), See-through
 `58a1cb11d13f85acec9bbddb8cd4b6487843d4cf`.
 

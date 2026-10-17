@@ -69,5 +69,13 @@ jobs:
           pip install -e ".[dev,app]"
           pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           pip install diffusers==0.37.0
+      - name: Fetch pinned upstream inference source (no weights)
+        run: |
+          git init "$RUNNER_TEMP/see-through"
+          git -C "$RUNNER_TEMP/see-through" remote add origin https://github.com/shitagaki-lab/see-through.git
+          git -C "$RUNNER_TEMP/see-through" fetch --depth=1 origin 58a1cb11d13f85acec9bbddb8cd4b6487843d4cf
+          git -C "$RUNNER_TEMP/see-through" checkout --detach FETCH_HEAD
       - name: Verify low_vram and staged contracts (no CUDA or weights)
-        run: python -m pytest -q -ra tests/test_low_vram.py tests/test_low_vram_metrics.py tests/test_seethrough_memory.py
+        env:
+          SEE_THROUGH_TEST_SOURCE: ${{ runner.temp }}/see-through
+        run: python -m pytest -q -ra tests/test_low_vram.py tests/test_low_vram_metrics.py tests/test_seethrough_memory.py tests/test_unet_memory.py
