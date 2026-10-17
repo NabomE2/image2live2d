@@ -157,7 +157,8 @@ def test_loader_dtype_and_prompt_cache_order(backend, monkeypatch):
     assert obj() == "same output"
 
 
-def test_real_png_through_staged_cli_adapter(backend, tmp_path):
+@pytest.mark.parametrize("profile_args", [[], ["--low-vram"]])
+def test_real_png_through_staged_cli_adapter(backend, tmp_path, profile_args):
     """Real PNG + actual adapter/process runner, fake ML backend; no GPU quality claim."""
     from PIL import Image
     Image.new("RGBA", (16, 16), (100, 20, 30, 255)).save(tmp_path / "input.png")
@@ -197,7 +198,7 @@ def further_extr():
     try:
         deadline = time.monotonic() + 20
         for stage in ("layerdiff", "depth", "psd"):
-            backend.run_process([sys.executable, str(SERVICE / "staged_inference.py"), stage, str(script)],
+            backend.run_process([sys.executable, str(SERVICE / "staged_inference.py"), *profile_args, stage, str(script)],
                                 cwd=tmp_path, deadline=deadline, stage=stage, on_event=events.append)
     finally:
         if old is None:

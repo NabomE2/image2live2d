@@ -40,8 +40,8 @@ TIMEOUT = int(os.environ.get("SEE_THROUGH_TIMEOUT", "900"))
 if TIMEOUT <= 0:
     raise ValueError("SEE_THROUGH_TIMEOUT must be positive")
 MEMORY_PROFILE = os.environ.get("SEE_THROUGH_MEMORY_PROFILE", "staged")
-if MEMORY_PROFILE not in {"staged", "legacy"}:
-    raise ValueError("SEE_THROUGH_MEMORY_PROFILE must be staged or legacy")
+if MEMORY_PROFILE not in {"staged", "low_vram", "legacy"}:
+    raise ValueError("SEE_THROUGH_MEMORY_PROFILE must be staged, low_vram or legacy")
 # Default to the known-good subprocess path. Warm in-process is opt-in (INFERENCE_MODE=warm) until
 # See-through's apply_* API is confirmed on the box — its real signature is positional and our warm
 # wrapper is best-effort, so leaving it default would silently fall back per request.
@@ -62,7 +62,7 @@ _jobs_lock = threading.Lock()
 @app.on_event("startup")
 def _startup() -> None:
     global _warm
-    if INFERENCE_MODE == "subprocess" or MEMORY_PROFILE == "staged":
+    if INFERENCE_MODE == "subprocess" or MEMORY_PROFILE in {"staged", "low_vram"}:
         log.info("INFERENCE_MODE=subprocess (warm pipeline disabled)")
         return
     try:
@@ -198,13 +198,18 @@ def _subprocess_infer(src: Path, on_event=lambda event: None) -> Path:
         cmd += ["--repo_id_layerdiff", paths["layerdiff"], "--repo_id_depth", paths["depth"]]
     if RESOLUTION:
         cmd += ["--resolution", RESOLUTION]
+    elif MEMORY_PROFILE == "low_vram":
+        cmd += ["--resolution", "768"]
+    if MEMORY_PROFILE == "low_vram":
+        cmd += ["--inference_steps", "20"]
     with _subproc_lock:
         before = set(output.rglob("*.psd")) if output.exists() else set()
         deadline = time.monotonic() + TIMEOUT
-        if MEMORY_PROFILE == "staged":
+        if MEMORY_PROFILE in {"staged", "low_vram"}:
             runner = str(Path(__file__).with_name("staged_inference.py"))
+            profile_args = ["--low-vram"] if MEMORY_PROFILE == "low_vram" else []
             for stage in ("layerdiff", "depth", "psd"):
-                run_process([PYTHON, runner, stage, *cmd[1:]], cwd=str(SEE_THROUGH_DIR),
+                run_process([PYTHON, runner, *profile_args, stage, *cmd[1:]], cwd=str(SEE_THROUGH_DIR),
                             deadline=deadline, stage=stage, on_event=on_event)
         else:
             run_process(cmd, cwd=str(SEE_THROUGH_DIR), deadline=deadline,

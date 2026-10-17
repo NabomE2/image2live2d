@@ -1,7 +1,8 @@
 """Run one stage of the pinned upstream CLI, preserving its arguments and output layout.
 
 Each invocation exits before the next model is loaded. No quantization, resolution,
-step count, scheduler or attention changes. This adapter targets upstream 58a1cb11.
+step count, scheduler or attention changes in staged mode. The opt-in low_vram
+profile uses a separate LayerDiff adapter. Targets upstream 58a1cb11.
 """
 from __future__ import annotations
 
@@ -33,7 +34,7 @@ def measured(name):
         emit(name, "end", elapsed_seconds=round(time.monotonic() - start, 3))
 
 
-def adapt(iu, torch):
+def adapt(iu, torch, profile="staged"):
     """Load in inference dtype and retire prompt encoders before allocating the UNet on CUDA."""
     for cls in (iu.TransparentVAE, iu.UNetFrameConditionModel,
                 iu.KDiffusionStableDiffusionXLPipeline, iu.MarigoldDepthPipeline):
@@ -49,6 +50,9 @@ def adapt(iu, torch):
                     obj.text_encoder_2.to(device="cuda", dtype=torch.bfloat16)
                     with torch.inference_mode():
                         obj.cache_tag_embeds()
+                if profile == "low_vram":
+                    from low_vram import configure
+                    configure(obj, torch)
             return obj
 
         cls.from_pretrained = staticmethod(load)
@@ -60,13 +64,21 @@ def adapt(iu, torch):
         def call(self, *args, _original=original_call, _name=cls.__name__, **kwargs):
             # LayerDiff calls this once for body and once for head (unless head is empty).
             with measured(f"infer.{_name}"):
+                if profile == "low_vram" and _name == "KDiffusionStableDiffusionXLPipeline":
+                    from low_vram import infer
+                    return infer(self, *args, **kwargs)
                 return _original(self, *args, **kwargs)
 
         cls.__call__ = call
 
 
 def main():
-    stage, script, *args = sys.argv[1:]
+    args = sys.argv[1:]
+    profile = "staged"
+    if args[:1] == ["--low-vram"]:
+        profile = "low_vram"
+        args = args[1:]
+    stage, script, *args = args
     if stage not in {"layerdiff", "depth", "psd"}:
         raise ValueError(f"Unknown stage: {stage}")
     for name in ("OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "OMP_NUM_THREADS"):
@@ -84,7 +96,7 @@ def main():
         with measured("imports"):
             import torch
             from utils import inference_utils as iu
-        adapt(iu, torch)
+        adapt(iu, torch, profile)
         selected = {"layerdiff": "apply_layerdiff", "depth": "apply_marigold", "psd": "further_extr"}[stage]
         for name in ("apply_layerdiff", "apply_marigold", "further_extr"):
             if name != selected:

@@ -157,3 +157,20 @@ docker stats --no-stream
 `cuda_oom`은 GPU 메모리 부족, `host_memory_exhausted`는 호스트 메모리 부족 근거가 있는 오류, `timeout`은 시간 제한입니다. 원인 불명 강제 종료는 `process_killed`로 표시합니다. 같은 GPU에서 다른 생성형 AI 프로그램을 함께 실행하지 말고, Docker/WSL에 Windows의 RAM 32GB 전부를 할당하지 마세요. CPU offload나 swap 증가는 VRAM 부족을 RAM/디스크 지연으로 옮길 수 있으므로 로그 없이 해결책으로 적용하지 마세요.
 
 브라우저 PNG 업로드 → 분리/리깅 → VTube Studio용 ZIP 다운로드 흐름은 동일합니다. 이미 처리 중이면 새 업로드는 HTTP 429로 거절하므로 현재 작업 완료 후 다시 시도하세요.
+
+
+### 선택형 low_vram 실행
+
+RTX 4060 8GB용 메모리 절약 경로는 `.env`에서
+`SEE_THROUGH_MEMORY_PROFILE=low_vram`으로 선택합니다. LayerDiff를 **768 해상도·20스텝**으로
+실행하고 UNet/VAE 교대 배치, SDPA, FF 청크 처리와 SD VAE 타일링을 적용합니다.
+기존 `staged`(1280/30)는 기본 고품질 모드로 유지됩니다.
+
+```bash
+SEE_THROUGH_MEMORY_PROFILE=low_vram ./start.sh --gpu
+```
+
+설정 변경 후 컨테이너 재생성이 필요하며 모델 볼륨은 유지됩니다. **실제 RTX 4060의 성공 여부,
+최대 메모리·속도·출력 품질은 미검증**입니다. CPU offload는 RAM/전송 비용이 생기고 해상도·스텝
+감소와 타일링은 결과를 바꿀 수 있습니다. 자세한 설정, 복귀 방법과 측정 절차는
+[low_vram 안내](service/seethrough/MEMORY.md)를 확인하세요.
