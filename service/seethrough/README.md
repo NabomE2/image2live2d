@@ -44,3 +44,6 @@ GET `/jobs/{id}` returns status/telemetry/error_code, and GET `/jobs/{id}/result
 streams the completed PSD. A busy GPU returns HTTP 429 before reading another upload.
 
 For RTX 4060 8GB, see the [low_vram configuration and validation guide](MEMORY.md#low_vram-rtx-4060-8gb를-위한-선택형-프로필). Real GPU fit, speed and quality remain **unverified**; staged stays the default.
+
+
+For low_vram timeouts, see [step timing, measured placement and performance analysis](PERFORMANCE.md).

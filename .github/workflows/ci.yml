@@ -70,4 +70,4 @@ jobs:
           pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
           pip install diffusers==0.37.0
       - name: Verify low_vram and staged contracts (no CUDA or weights)
-        run: python -m pytest -q -ra tests/test_low_vram.py tests/test_seethrough_memory.py
+        run: python -m pytest -q -ra tests/test_low_vram.py tests/test_low_vram_metrics.py tests/test_seethrough_memory.py

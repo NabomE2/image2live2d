@@ -167,3 +167,6 @@ RTX 4060에서는 동일 PNG·모델 revision·seed로 `staged`와 `low_vram`을
 다운로드와 첫 로딩을 구분하고, 본체/머리/깊이 시간, CUDA peak, RSS/cgroup peak,
 Windows 공유 GPU 메모리·RAM, 생성 PSD의 파츠·경계·알파 및 Live2D ZIP을 비교합니다.
 **실측 전에는 “8GB에서 성공” 또는 “몇 배 빨라짐”으로 해석하지 마세요.**
+
+
+For low_vram timeouts, see [step timing, measured placement and performance analysis](PERFORMANCE.md).
