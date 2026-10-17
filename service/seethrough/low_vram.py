@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import gc
 import types
+from contextlib import nullcontext
 
 from low_vram_metrics import inventory, span, transfer
 from telemetry import emit
+from unet_memory import first_call_trace
+from unet_memory import install as install_unet_memory
 
 
 class Placement:
@@ -22,15 +25,21 @@ class Placement:
         self.models = {"unet": pipe.unet, "vae": pipe.vae, "decoder": pipe.trans_vae.decoder}
         self.moves = {name: model.to for name, model in self.models.items()}
         self.group_index = None
+        self.offload = getattr(pipe.unet, "_low_vram_offload", None)
 
     def move(self, name, device):
         before = inventory(self.models[name])
         with span(self.torch, "layerdiff.model_transfer", model=name, target=device,
                   group_index=self.group_index, before=before) as timing:
-            self.moves[name](device=device, dtype=self.torch.bfloat16)
+            if name == "unet" and self.offload is not None:
+                self.offload.place(device, self.torch.bfloat16)
+            else:
+                self.moves[name](device=device, dtype=self.torch.bfloat16)
             after = inventory(self.models[name])
             timing["after"] = after
-            if any(d.split(":")[0] != device for d in after["device_bytes"]):
+            if name == "unet" and self.offload is not None:
+                self.offload.validate(device)
+            elif any(d.split(":")[0] != device for d in after["device_bytes"]):
                 raise RuntimeError(f"low_vram placement mismatch for {name}: {after}")
 
     def activate(self, *names):
@@ -100,6 +109,7 @@ def configure(pipe, torch):
     # whole-image, one layer at a time. Tiling can change pixels near seams.
     pipe.vae.tile_sample_min_size = 512
     pipe.vae.tile_latent_min_size = 512 // pipe.vae_scale_factor
+    offload = install_unet_memory(pipe.unet, torch)
     pipe._low_vram_placement = Placement(pipe, torch)
 
     # Pinned apply_layerdiff moves all three models to CUDA after loading.
@@ -120,7 +130,10 @@ def configure(pipe, torch):
 
     def bootstrap_unet(self, *args, **kwargs):
         with span(torch, "layerdiff.bootstrap_unet") as timing:
-            result = original_unet_to(*args, **kwargs)
+            if offload is not None and not args and kwargs.get("device") in {"cpu", "cuda"}:
+                result = offload.place(kwargs["device"], kwargs.get("dtype", torch.bfloat16))
+            else:
+                result = original_unet_to(*args, **kwargs)
             timing["residency"] = inventory(self)
             return result
 
@@ -149,6 +162,7 @@ def _encode(pipe, fullpage, torch, ops):
 
 
 def _denoise(pipe, condition, prompt, steps, generator, group_index, torch, ops):
+    emit("layerdiff.denoise_prepare", "enter", group_index=group_index)
     pipe._low_vram_placement.activate("unet")
     device, dtype = pipe.unet.device, pipe.unet.dtype
     frames = len(prompt)
@@ -156,21 +170,26 @@ def _denoise(pipe, condition, prompt, steps, generator, group_index, torch, ops)
                          role="condition_in", group_index=group_index)
     h, w = condition.shape[-2:]
     condition = condition[:, None].expand(-1, frames, -1, -1, -1)
-    embeds, pooled = pipe.encode_cropped_prompt_77tokens_cached(prompt)
+    with span(torch, "layerdiff.prompt_lookup", group_index=group_index):
+        embeds, pooled = pipe.encode_cropped_prompt_77tokens_cached(prompt)
     embeds = transfer(torch, embeds, device=device, role="prompt_embeds", group_index=group_index)
     pooled = transfer(torch, pooled, device=device, role="pooled_embeds", group_index=group_index)
     size = (h * pipe.vae_scale_factor, w * pipe.vae_scale_factor)
-    time_ids = torch.tensor([list(size + (0, 0) + size)], dtype=dtype, device=device)
-    time_ids = time_ids.expand(frames, -1)
-    timesteps, count = ops.retrieve_timesteps(pipe.scheduler, steps, device,
-                                             timesteps=None, sigmas=None)
+    with span(torch, "layerdiff.time_ids", group_index=group_index):
+        time_ids = torch.tensor([list(size + (0, 0) + size)], dtype=dtype, device=device)
+        time_ids = time_ids.expand(frames, -1)
+    with span(torch, "layerdiff.schedule_setup", group_index=group_index):
+        timesteps, count = ops.retrieve_timesteps(pipe.scheduler, steps, device,
+                                                 timesteps=None, sigmas=None)
     # Preserve upstream's shared noise across frames and CUDA generator.
-    noise = ops.randn_tensor((1, 1, 4, h, w), generator=generator, device=device, dtype=dtype)
-    latents = noise.expand(-1, frames, -1, -1, -1) * pipe.scheduler.init_noise_sigma
-    del noise
+    with span(torch, "layerdiff.noise_setup", group_index=group_index):
+        noise = ops.randn_tensor((1, 1, 4, h, w), generator=generator, device=device, dtype=dtype)
+        latents = noise.expand(-1, frames, -1, -1, -1) * pipe.scheduler.init_noise_sigma
+        del noise
     emit("layerdiff.denoise", "start", group_index=group_index, frames=frames,
          latent_shape=list(latents.shape), steps=len(timesteps), requested_steps=steps,
-         adapter_transfers="outside_step_loop")
+         adapter_activation_transfers="outside_step_loop",
+         transformer_weight_transfers="per_block_inside_unet")
     with pipe.progress_bar(total=count) as progress:
         for i, t in enumerate(timesteps):
             fields = {"group_index": group_index, "step": i + 1, "steps": len(timesteps)}
@@ -178,7 +197,9 @@ def _denoise(pipe, condition, prompt, steps, generator, group_index, torch, ops)
                 with span(torch, "layerdiff.step_prepare", **fields) as prepare:
                     model_input = pipe.scheduler.scale_model_input(latents, t)
                     unet_input = torch.cat([model_input, condition], dim=-3)
-                with span(torch, "layerdiff.unet", **fields) as unet:
+                trace = (first_call_trace(pipe.unet, group_index)
+                         if i == 0 and hasattr(pipe.unet, "named_modules") else nullcontext())
+                with span(torch, "layerdiff.unet", **fields) as unet, trace:
                     prediction = pipe.unet(
                         unet_input, t, encoder_hidden_states=embeds,
                         added_cond_kwargs={"text_embeds": pooled, "time_ids": time_ids},
@@ -229,6 +250,8 @@ def infer(pipe, *, fullpage, prompt, num_inference_steps=20, generator=None,
         raise ValueError("low_vram supports the pinned CLI's fullpage/batch=1/guidance=1 path only")
     pipe._guidance_scale = guidance_scale
     pipe._low_vram_placement.group_index = group_index
+    if hasattr(pipe.unet, "_low_vram_trace"):
+        pipe.unet._low_vram_trace["group_index"] = group_index
     hardware = {}
     if torch.cuda.is_initialized():
         props = torch.cuda.get_device_properties(torch.cuda.current_device())

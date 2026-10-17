@@ -47,3 +47,6 @@ For RTX 4060 8GB, see the [low_vram configuration and validation guide](MEMORY.m
 
 
 For low_vram timeouts, see [step timing, measured placement and performance analysis](PERFORMANCE.md).
+
+For current low_vram UNet block offload, mathematically safe frame/position partitioning,
+and first-call stall diagnostics, see [frame memory scheduling](FRAME_MEMORY.md).

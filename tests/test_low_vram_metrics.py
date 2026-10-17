@@ -21,7 +21,7 @@ def test_span_synchronizes_and_separates_prior_queue_wait(metrics, monkeypatch):
                                                 synchronize=lambda: events.append(("sync", {}))))
     with metrics.span(torch, "layerdiff.unet", step=1) as result:
         events.append(("call", {}))
-    assert [event for event, _ in events] == ["start", "sync", "call", "sync", "end"]
+    assert [event for event, _ in events] == ["start", "sync", "ready", "call", "submitted", "sync", "end"]
     assert result["elapsed_seconds"] == 3
     assert events[-1][1]["boundary_wait_seconds"] == 2
     assert events[-1][1]["peak_scope"] == "process"
@@ -40,7 +40,7 @@ def test_error_does_not_resynchronize_or_mask_original_exception(metrics, monkey
                                                 synchronize=lambda: calls.append("sync")))
     with pytest.raises(MemoryError, match="original"), metrics.span(torch, "layerdiff.unet"):
         raise MemoryError("original")
-    assert calls == ["start", "sync", "error"]
+    assert calls == ["start", "sync", "ready", "error"]
 
 
 def test_cpu_span_never_initializes_cuda(metrics, monkeypatch):
@@ -134,8 +134,31 @@ def test_span_logs_start_end_cuda_memory_without_reset(metrics, monkeypatch, cap
         memory.update(allocated=150, reserved=300)
     rows = [json.loads(line.split(telemetry.PREFIX)[1])
             for line in capsys.readouterr().out.splitlines()]
-    assert [row["event"] for row in rows] == ["start", "end"]
-    assert [row["cuda_allocated_bytes"] for row in rows] == [100, 150]
-    assert [row["cuda_reserved_bytes"] for row in rows] == [200, 300]
+    assert [row["event"] for row in rows] == ["start", "ready", "submitted", "end"]
+    assert [row["cuda_allocated_bytes"] for row in rows] == [100, 100, 150, 150]
+    assert [row["cuda_reserved_bytes"] for row in rows] == [200, 200, 300, 300]
     assert all(row["cuda_peak_allocated_bytes"] == 900 for row in rows)
     assert all(row["cuda_peak_reserved_bytes"] == 1000 for row in rows)
+
+
+@pytest.mark.parametrize("failed_sync,expected", [
+    (1, ["start", "error"]),
+    (2, ["start", "ready", "body", "submitted", "error"]),
+])
+def test_sync_failure_distinguishes_before_body_and_completion(metrics, monkeypatch,
+                                                             failed_sync, expected):
+    events = []
+    calls = 0
+
+    def sync():
+        nonlocal calls
+        calls += 1
+        if calls == failed_sync:
+            raise RuntimeError("driver wait failed")
+
+    monkeypatch.setattr(metrics, "emit", lambda stage, event, **kw: events.append(event))
+    torch = SimpleNamespace(cuda=SimpleNamespace(is_initialized=lambda: True, synchronize=sync))
+    with pytest.raises(RuntimeError, match="driver wait failed"), metrics.span(torch, "test"):
+        events.append("body")
+    assert events == expected
+    assert calls == failed_sync

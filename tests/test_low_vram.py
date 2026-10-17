@@ -269,6 +269,10 @@ def test_full_tensor_pipeline_preserves_frames_alpha_and_steps(low, monkeypatch,
     assert completed[-1]["progress"] == 1.0
     assert all(e["elapsed_seconds"] >= e["unet_seconds"] for e in completed)
     starts = [e for e in logs if e["event"] == "start"]
+    first_step = next(i for i, e in enumerate(logs) if e["stage"] == "layerdiff.step")
+    for stage in ("prompt_lookup", "time_ids", "schedule_setup", "noise_setup"):
+        assert any(e["stage"] == f"layerdiff.{stage}" and e["event"] == "end"
+                   for e in logs[:first_step])
     for step in range(1, 21):
         assert [e["stage"] for e in starts if e.get("step") == step] == [
             "layerdiff.step", "layerdiff.step_prepare", "layerdiff.unet", "layerdiff.scheduler"]
