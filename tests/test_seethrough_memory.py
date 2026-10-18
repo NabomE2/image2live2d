@@ -75,7 +75,7 @@ def app_module(backend, monkeypatch):
     return importlib.import_module("app")
 
 
-def test_three_stages_share_deadline_and_model_arguments(app_module, monkeypatch, tmp_path):
+def test_three_stages_have_independent_deadlines_and_model_arguments(app_module, monkeypatch, tmp_path, stage_output):
     calls = []
     monkeypatch.setattr(app_module, "MEMORY_PROFILE", "staged")
     monkeypatch.setattr(app_module, "RESOLUTION", None)
@@ -83,15 +83,12 @@ def test_three_stages_share_deadline_and_model_arguments(app_module, monkeypatch
     monkeypatch.setattr(app_module.models, "paths", lambda: {"layerdiff": "/models/l", "depth": "/models/d"})
     def run(cmd, **kwargs):
         calls.append((cmd, kwargs))
-        if kwargs["stage"] == "psd":
-            output = tmp_path / "output"
-            output.mkdir()
-            (output / "input.psd").write_bytes(b"PSD")
-            (output / "input_depth.psd").write_bytes(b"depth")
+        stage_output(Path(cmd[cmd.index("--save_dir") + 1]), kwargs["stage"])
     monkeypatch.setattr(app_module, "run_process", run)
+    (tmp_path / "input.png").write_bytes(b"input")
     assert app_module._subprocess_infer(tmp_path / "input.png").name == "input.psd"
     assert [kw["stage"] for _, kw in calls] == ["layerdiff", "depth", "psd"]
-    assert len({kw["deadline"] for _, kw in calls}) == 1
+    assert len({kw["deadline"] for _, kw in calls}) == 3
     for cmd, _ in calls:
         assert cmd[cmd.index("--repo_id_layerdiff") + 1] == "/models/l"
         assert cmd[cmd.index("--repo_id_depth") + 1] == "/models/d"

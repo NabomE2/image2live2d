@@ -139,7 +139,10 @@ CLI ZIP은 지정한 Live2D 디렉터리 옆에 생성되며, API에서는 `live
 ```dotenv
 SEE_THROUGH_MEMORY_PROFILE=staged
 SEE_THROUGH_TIMEOUT=900
-SEE_THROUGH_CLIENT_TIMEOUT=1800
+# Leave client timeout unset to follow independent server stage budgets.
+SEE_THROUGH_LAYERDIFF_TIMEOUT=1800
+SEE_THROUGH_DEPTH_TIMEOUT=1800
+SEE_THROUGH_PSD_TIMEOUT=900
 ```
 
 900초는 세 단계 전체의 제한이며 단계마다 새로 900초를 부여하지 않습니다. 기존에도 서비스 환경변수는 있었으나 이제 Compose에서 전달합니다. 클라이언트 제한은 폴링을 기다리는 별도 제한입니다. 로그에서 메모리가 안정적이고 정상 추론이 계속 진행됨을 확인한 경우에만 서버 제한을 조정하고, 클라이언트 제한은 서버보다 여유 있게 설정하세요. 기본 제한은 늘리지 않았습니다.
@@ -174,3 +177,6 @@ SEE_THROUGH_MEMORY_PROFILE=low_vram ./start.sh --gpu
 최대 메모리·속도·출력 품질은 미검증**입니다. CPU offload는 RAM/전송 비용이 생기고 해상도·스텝
 감소와 타일링은 결과를 바꿀 수 있습니다. 자세한 설정, 복귀 방법과 측정 절차는
 [low_vram 안내](service/seethrough/MEMORY.md)를 확인하세요.
+
+Current staged/low_vram runs use durable checkpoints and independent stage deadlines;
+see [stage resume and retention](service/seethrough/CHECKPOINTS.md).

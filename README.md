@@ -275,5 +275,7 @@ docker compose --profile gpu down          # remove containers; retain models
 
 To delete the downloaded models too, use `docker compose --profile gpu down -v`.
 The app listens only on localhost and the GPU companion has no published port.
-Uploads and generated jobs are temporary and are lost when the app container is
-recreated. This setup is intended for personal local use.
+Uploads and stage checkpoints survive container recreation in job volumes and expire
+after 7 inactive days by default. The UI can resume a failed job or retry Depth while
+reusing LayerDiff. See [checkpoint settings and retention](service/seethrough/CHECKPOINTS.md).
+`down -v` deletes retained jobs as well as models. This setup is intended for personal local use.

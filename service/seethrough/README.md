@@ -24,6 +24,7 @@ SEE_THROUGH_DIR=/opt/see-through uvicorn app:app --host 0.0.0.0 --port 8000
 - `GET /health` → `{"ok": true, ...}`
 - `POST /decompose` (raw image bytes; optional `X-Auth-Token`) → HTTP 202 with `job_id`
 - `GET /jobs/{id}` → status, telemetry, error code
+- `POST /jobs/{id}/resume` → resume validated checkpoints; `?stage=depth` retries Depth and rebuilds PSD
 - `GET /jobs/{id}/result` → completed `.psd` bytes
 
 Notes: single GPU ⇒ one active request; additional requests receive HTTP 429. Install models first.
@@ -33,7 +34,8 @@ Set `SEE_THROUGH_TOKEN` to require auth. Don't expose the port to `0.0.0.0/0` �
 
 See [MEMORY.md](MEMORY.md) for the pinned-source analysis, staged BF16 loading,
 structured telemetry, failure codes, and RTX 4060 validation limits.
-`SEE_THROUGH_TIMEOUT` defaults to 900 seconds for the entire subprocess workflow;
+`SEE_THROUGH_TIMEOUT` defaults to 900 seconds as the fallback for each stage
+(and the whole process in legacy mode);
 `SEE_THROUGH_MEMORY_PROFILE` defaults to `staged` (`low_vram` opts into 768px/20-step LayerDiff with alternating UNet/VAE placement; `legacy` retains the original CLI).
 Use one Uvicorn worker. Copy **all `service/seethrough/*.py` files** together for a VM
 installation; the Dockerfile does this automatically. The adapter targets the Dockerfile's
@@ -50,3 +52,5 @@ For low_vram timeouts, see [step timing, measured placement and performance anal
 
 For current low_vram UNet block offload, mathematically safe frame/position partitioning,
 and first-call stall diagnostics, see [frame memory scheduling](FRAME_MEMORY.md).
+
+See [checkpoints, independent timeouts, resume API and retention](CHECKPOINTS.md).

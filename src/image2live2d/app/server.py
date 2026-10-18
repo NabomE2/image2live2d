@@ -20,6 +20,7 @@ import base64
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -135,6 +136,11 @@ class _Job:
     rig: object = None
     inp_bytes: bytes = b""
     source: bytes = b""
+    filename: str = ""
+    decomposition: dict = field(default_factory=dict)
+    worker_active: bool = False
+    resume_remote: bool = False
+    restart_stage: str | None = None
     live2d_lock: object = field(default_factory=threading.Lock)
 
     def public(self) -> dict:
@@ -143,6 +149,7 @@ class _Job:
             "steps": [{"name": s.name, "status": s.status, "seconds": round(s.seconds, 2)}
                       for s in self.steps],
             "result": self.result, "has_inp": bool(self.inp_bytes),
+            "decomposition": self.decomposition,
         }
 
 
@@ -307,11 +314,46 @@ def _flat_decompose_available() -> bool:
     return bool(os.environ.get("IMAGE2LIVE2D_DECOMPOSE_URL") or os.environ.get("IMAGE2LIVE2D_GCP_INSTANCE"))
 
 
+def _web_root():
+    return Path(os.environ.get("IMAGE2LIVE2D_JOB_DIR", "/tmp/image2live2d-jobs"))
+
+
+def _persist_job(job):
+    if not job.work or not job.filename:
+        return
+    record = {"name": job.name, "filename": job.filename, "decomposition": job.decomposition,
+              "updated": time.time(), "status": job.status}
+    temporary = job.work / "job.tmp"
+    with temporary.open("w") as stream:
+        json.dump(record, stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+    temporary.replace(job.work / "job.json")
+
+
+def _cleanup_web_jobs():
+    retention = int(os.environ.get("IMAGE2LIVE2D_RETENTION_SECONDS", "604800"))
+    if retention <= 0:
+        raise ValueError("IMAGE2LIVE2D_RETENTION_SECONDS must be positive")
+    with _LOCK:
+        for path in _web_root().glob("*/job.json"):
+            job = _JOBS.get(path.parent.name)
+            if job and (job.status == "running" or job.worker_active):
+                continue
+            if time.time() - path.stat().st_mtime > retention:
+                shutil.rmtree(path.parent, ignore_errors=True)
+                _JOBS.pop(path.parent.name, None)
+
+
 def start_job(data: bytes, filename: str) -> str:
-    """Register a job and kick off the pipeline on a worker thread. Returns the job id."""
+    """Persist the source/remote receipt so a service restart does not lose a GPU job."""
+    _cleanup_web_jobs()
     jid = uuid.uuid4().hex[:12]
-    job = _Job(id=jid, name=Path(filename).stem or "model", source=data)
-    job.work = Path(tempfile.mkdtemp(prefix=f"i2l_job_{jid}_"))
+    job = _Job(id=jid, name=Path(filename).stem or "model", source=data, filename=filename, worker_active=True)
+    job.work = _web_root() / jid
+    job.work.mkdir(parents=True)
+    (job.work / "upload").write_bytes(data)
+    _persist_job(job)
     with _LOCK:
         _JOBS[jid] = job
     threading.Thread(target=_run_pipeline, args=(job, data, filename), daemon=True).start()
@@ -320,7 +362,51 @@ def start_job(data: bytes, filename: str) -> str:
 
 def get_job(jid: str) -> "_Job | None":
     with _LOCK:
-        return _JOBS.get(jid)
+        if jid in _JOBS:
+            return _JOBS[jid]
+        if not jid or any(c not in "0123456789abcdef" for c in jid):
+            return None
+        work = _web_root() / jid
+        try:
+            saved = json.loads((work / "job.json").read_text())
+            retention = int(os.environ.get("IMAGE2LIVE2D_RETENTION_SECONDS", "604800"))
+            if time.time() - saved["updated"] > retention:
+                return None
+            job = _Job(id=jid, name=saved["name"], filename=saved["filename"], work=work,
+                       source=(work / "upload").read_bytes(), status="error",
+                       error="App restarted. Resume to reuse available GPU checkpoints.",
+                       decomposition=saved.get("decomposition", {}))
+            _JOBS[jid] = job
+            return job
+        except (OSError, ValueError, KeyError):
+            return None
+
+
+def resume_job(jid, stage=None):
+    if stage not in {None, "depth"}:
+        raise ValueError("Only resume or Depth restart is supported")
+    job = get_job(jid)
+    if job is None:
+        raise ValueError("Job not found or retention expired")
+    with _LOCK:
+        if job.status == "running" or job.worker_active:
+            raise ValueError("Job is already running")
+        if not job.decomposition.get("job_id") or job.decomposition.get("resumable") is False:
+            raise ValueError("No remote checkpoint job; upload again")
+        job.status, job.error, job.steps = "running", "", []
+        job.inp_bytes, job.result = b"", {}
+        job.resume_remote, job.restart_stage = True, stage
+        # Downstream bundles must never survive a changed decomposition result.
+        with job.live2d_lock:
+            shutil.rmtree(job.work / "live2d", ignore_errors=True)
+        try:
+            _persist_job(job)
+        except OSError:
+            job.status = "error"
+            raise
+        job.worker_active = True
+    threading.Thread(target=_run_pipeline, args=(job, job.source, job.filename), daemon=True).start()
+    return jid
 
 
 def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
@@ -379,7 +465,13 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
                                  "auto start/stop (or upload a .psd / .zip of layers)")
             img = work / f"{job.name}{ext}"
             img.write_bytes(data)
-            ctx["stack"] = decompose.from_service(img, target, work_dir=work / "layers", token=token)
+            def record(status):
+                job.decomposition = {**job.decomposition, **status}
+                _persist_job(job)
+            ctx["stack"] = decompose.from_service(
+                img, target, work_dir=work / "layers", token=token, on_status=record,
+                resume=job.resume_remote, restart_stage=job.restart_stage)
+            job.resume_remote, job.restart_stage = False, None
         else:
             raise ValueError(f"unsupported upload {ext!r}")
         job.stack = ctx["stack"]
@@ -469,10 +561,16 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
         if not job.error:
             job.error = traceback.format_exc().splitlines()[-1]
     finally:
-        # guarantee the GPU is released even if a stage failed (else the VM never tears down)
-        if ctx.get("gpu") and not ctx.get("gpu_released"):
-            ctx["gpu"].release()
-            ctx["gpu_released"] = True
+        try:
+            _persist_job(job)
+        finally:
+            try:
+                # Release the managed GPU even if persistence failed.
+                if ctx.get("gpu") and not ctx.get("gpu_released"):
+                    ctx["gpu"].release()
+                    ctx["gpu_released"] = True
+            finally:
+                job.worker_active = False
 
 
 def render_job(job: _Job, settings: dict, *, res: int = 384) -> bytes:
@@ -789,6 +887,16 @@ def _make_handler():
             data = self.rfile.read(length)
             qs = parse_qs(u.query)
             filename = (qs.get("name") or ["upload"])[0]
+            parts = u.path.strip("/").split("/")
+            if len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "resume":
+                if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
+                    self._json(403, {"error": "Use the resume button in this app."})
+                    return
+                try:
+                    self._json(202, {"job_id": resume_job(parts[2], (qs.get("stage") or [None])[0])})
+                except ValueError as exc:
+                    self._json(409, {"error": str(exc)})
+                return
             if u.path == "/api/jobs":
                 if (os.environ.get("IMAGE2LIVE2D_LOCAL_GPU_URL")
                         and Path(filename).suffix.lower() in _FLAT_IMAGE):
@@ -824,6 +932,12 @@ def _make_handler():
 
 def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
     """Start the local web app (blocking). Ctrl-C to stop."""
+    _cleanup_web_jobs()
+    stopped = threading.Event()
+    def cleanup_loop():
+        while not stopped.wait(3600):
+            _cleanup_web_jobs()
+    threading.Thread(target=cleanup_loop, daemon=True).start()
     httpd = ThreadingHTTPServer((host, port), _make_handler())
     url, _ = _decompose_config()
     inst = os.environ.get("IMAGE2LIVE2D_GCP_INSTANCE")
@@ -839,4 +953,5 @@ def serve(host: str = "127.0.0.1", port: int = 8000) -> None:
     except KeyboardInterrupt:
         print("\nstopping")
     finally:
+        stopped.set()
         httpd.server_close()

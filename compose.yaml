@@ -6,7 +6,11 @@ services:
     environment:
       IMAGE2LIVE2D_LOCAL_GPU_URL: http://seethrough:8000
       IMAGE2LIVE2D_DECOMPOSE_URL: http://seethrough:8000
-      IMAGE2LIVE2D_DECOMPOSE_TIMEOUT: ${SEE_THROUGH_CLIENT_TIMEOUT:-1800}
+      IMAGE2LIVE2D_DECOMPOSE_TIMEOUT: ${SEE_THROUGH_CLIENT_TIMEOUT:-}
+      IMAGE2LIVE2D_JOB_DIR: /jobs
+      IMAGE2LIVE2D_RETENTION_SECONDS: ${SEE_THROUGH_RETENTION_SECONDS:-604800}
+    volumes:
+      - app-jobs:/jobs
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -15,10 +19,16 @@ services:
     build: service/seethrough
     volumes:
       - models:/models
+      - inference-jobs:/jobs
     environment:
       MODEL_DIR: /models
       HF_HOME: /models/cache
       MANAGED_MODELS: "1"
+      SEE_THROUGH_JOB_DIR: /jobs
+      SEE_THROUGH_RETENTION_SECONDS: ${SEE_THROUGH_RETENTION_SECONDS:-604800}
+      SEE_THROUGH_LAYERDIFF_TIMEOUT: ${SEE_THROUGH_LAYERDIFF_TIMEOUT:-1800}
+      SEE_THROUGH_DEPTH_TIMEOUT: ${SEE_THROUGH_DEPTH_TIMEOUT:-1800}
+      SEE_THROUGH_PSD_TIMEOUT: ${SEE_THROUGH_PSD_TIMEOUT:-900}
       SEE_THROUGH_TIMEOUT: ${SEE_THROUGH_TIMEOUT:-900}
       SEE_THROUGH_MEMORY_PROFILE: ${SEE_THROUGH_MEMORY_PROFILE:-staged}
     deploy:
@@ -33,3 +43,5 @@ services:
     security_opt: [no-new-privileges:true]
 volumes:
   models:
+  inference-jobs:
+  app-jobs:
