@@ -166,3 +166,71 @@ def test_client_timeout_counts_http_elapsed_time(tmp_path, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     with pytest.raises(RuntimeError, match="timed out after 1s"):
         decompose.from_service(img, "http://svc:8000", tmp_path / "w", poll_interval=0)
+
+
+def test_durable_job_receipt_resumes_same_job_and_reports_stages(tmp_path, monkeypatch):
+    img = tmp_path / "hero.png"
+    img.write_bytes(b"IMG")
+    requests, statuses = [], []
+    running = [False]
+    def fake(req, timeout=None):
+        requests.append((req.method, req.full_url))
+        if req.full_url.endswith('/decompose'):
+            return _FakeResp(b'{"job_id":"D","checkpoint_protocol":1}')
+        if '/resume?stage=depth' in req.full_url:
+            running[0] = True
+            return _FakeResp(b'{"job_id":"D"}')
+        if req.full_url.endswith('/result'):
+            return _FakeResp(b'PSD')
+        return _FakeResp(json.dumps({"status": "done" if running[0] else "error",
+                                    "error": "depth timeout", "stages": {
+                                        "layerdiff": {"status": "done"}}}).encode())
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr("image2live2d.core.decompose.sources.from_psd", lambda *a, **k: "stack")
+    with pytest.raises(RuntimeError, match="depth timeout"):
+        decompose.from_service(img, 'http://svc', tmp_path / 'w', poll_interval=0,
+                               on_status=statuses.append)
+    assert statuses[-1]['job_id'] == 'D'
+    assert decompose.from_service(img, 'http://svc', tmp_path / 'w', poll_interval=0,
+                                  resume=True, restart_stage='depth') == 'stack'
+    assert sum(url.endswith('/decompose') for _, url in requests) == 1
+    assert ('POST', 'http://svc/jobs/D/resume?stage=depth') in requests
+
+
+def test_durable_missing_job_does_not_silently_resubmit(tmp_path, monkeypatch):
+    import io
+    img = tmp_path / 'input.png'
+    img.write_bytes(b'input')
+    submits = []
+    def fake(req, timeout=None):
+        if req.method == 'POST':
+            submits.append(True)
+            return _FakeResp(b'{"job_id":"D","checkpoint_protocol":1}')
+        raise urllib.error.HTTPError(req.full_url, 404, 'Not Found', {}, io.BytesIO(b'unknown job id'))
+    monkeypatch.setattr('urllib.request.urlopen', fake)
+    with pytest.raises(RuntimeError, match='expired or unavailable'):
+        decompose.from_service(img, 'http://svc', tmp_path / 'w', poll_interval=0)
+    assert len(submits) == 1
+
+
+def test_auto_client_budget_uses_independent_stage_limits(tmp_path, monkeypatch):
+    img = tmp_path / 'input.png'
+    img.write_bytes(b'input')
+    monkeypatch.delenv('IMAGE2LIVE2D_DECOMPOSE_TIMEOUT', raising=False)
+    clock = [0.0]
+    monkeypatch.setattr('time.monotonic', lambda: clock[0])
+    monkeypatch.setattr('time.sleep', lambda seconds: None)
+    polls = []
+    def fake(req, timeout=None):
+        if req.method == 'POST':
+            return _FakeResp(b'{"job_id":"D","checkpoint_protocol":1}')
+        if req.full_url.endswith('/result'):
+            return _FakeResp(b'PSD')
+        polls.append(True)
+        clock[0] += 1000
+        return _FakeResp(json.dumps({"status": "done" if len(polls) == 3 else "running",
+                                    "stage_timeouts": {"layerdiff": 1800, "depth": 1800, "psd": 900}}).encode())
+    monkeypatch.setattr('urllib.request.urlopen', fake)
+    monkeypatch.setattr('image2live2d.core.decompose.sources.from_psd', lambda *a, **k: 'stack')
+    assert decompose.from_service(img, 'http://svc', tmp_path / 'w', poll_interval=0) == 'stack'
+    assert len(polls) == 3  # no old 1800-second client cutoff

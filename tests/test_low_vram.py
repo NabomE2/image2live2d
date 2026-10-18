@@ -20,7 +20,7 @@ def low(monkeypatch):
     ("low_vram", None, "768"), ("low_vram", "1024", "1024"),
     ("staged", None, None), ("legacy", None, None),
 ])
-def test_profile_commands(low, monkeypatch, tmp_path, profile, resolution, expected):
+def test_profile_commands(low, monkeypatch, tmp_path, stage_output, profile, resolution, expected):
     app = importlib.import_module("app")
     monkeypatch.setattr(app, "MEMORY_PROFILE", profile)
     monkeypatch.setattr(app, "RESOLUTION", resolution)
@@ -29,14 +29,18 @@ def test_profile_commands(low, monkeypatch, tmp_path, profile, resolution, expec
 
     def run(cmd, **kw):
         calls.append((cmd, kw))
-        output = tmp_path / "output"
-        output.mkdir(exist_ok=True)
-        (output / "input.psd").write_bytes(b"PSD")
+        if profile == "legacy":
+            output = tmp_path / "output"
+            output.mkdir(exist_ok=True)
+            (output / "input.psd").write_bytes(b"PSD")
+        else:
+            stage_output(Path(cmd[cmd.index("--save_dir") + 1]), kw["stage"])
 
     monkeypatch.setattr(app, "run_process", run)
+    (tmp_path / "input.png").write_bytes(b"input")
     assert app._subprocess_infer(tmp_path / "input.png").name == "input.psd"
     assert len(calls) == (1 if profile == "legacy" else 3)
-    assert len({kw['deadline'] for _, kw in calls}) == 1
+    assert len({kw['deadline'] for _, kw in calls}) == len(calls)
     for cmd, _ in calls:
         if expected:
             assert cmd[cmd.index("--resolution") + 1] == expected

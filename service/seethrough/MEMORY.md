@@ -84,7 +84,10 @@ RTX 4060에서는 같은 소유 PNG와 캐시된 같은 모델로 legacy/staged 
 ```dotenv
 SEE_THROUGH_MEMORY_PROFILE=low_vram
 SEE_THROUGH_TIMEOUT=900
-SEE_THROUGH_CLIENT_TIMEOUT=1800
+# Leave client timeout unset to follow independent server stage budgets.
+SEE_THROUGH_LAYERDIFF_TIMEOUT=1800
+SEE_THROUGH_DEPTH_TIMEOUT=1800
+SEE_THROUGH_PSD_TIMEOUT=900
 ```
 
 WSL 터미널에서 새 어댑터를 포함하도록 이미지를 빌드하고 컨테이너를 재생성합니다.
@@ -170,3 +173,6 @@ Windows 공유 GPU 메모리·RAM, 생성 PSD의 파츠·경계·알파 및 Live
 
 
 For low_vram timeouts, see [step timing, measured placement and performance analysis](PERFORMANCE.md).
+
+Current staged/low_vram runs use durable checkpoints and independent stage deadlines;
+see [stage resume and retention](CHECKPOINTS.md).

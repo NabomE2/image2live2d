@@ -433,6 +433,9 @@ def from_service(
     token: str | None = None,
     timeout: float | None = None,
     poll_interval: float = 5.0,
+    on_status: Callable[[dict], None] | None = None,
+    resume: bool = False,
+    restart_stage: str | None = None,
 ) -> LayerStack:
     """Decompose a single flat image via a remote See-through service, into a ``LayerStack``.
 
@@ -442,6 +445,7 @@ def from_service(
     ``from_psd``. This is the Tier-2 entry point — GPU work runs remotely, the rig builds locally.
     ``token`` sets ``X-Auth-Token`` if required. Requires the ``decompose`` extra (psd-tools + Pillow).
     """
+    import hashlib
     import json
     import math
     import os
@@ -474,8 +478,9 @@ def from_service(
             raise RuntimeError(f"decompose service connection error: {exc}") from exc
         return json.loads(body) if want_json else body
 
+    automatic_timeout = timeout is None and not os.environ.get("IMAGE2LIVE2D_DECOMPOSE_TIMEOUT")
     if timeout is None:
-        timeout = float(os.environ.get("IMAGE2LIVE2D_DECOMPOSE_TIMEOUT", "1800"))
+        timeout = float(os.environ.get("IMAGE2LIVE2D_DECOMPOSE_TIMEOUT") or "1800")
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("decompose timeout must be positive and finite")
     img_bytes = image_path.read_bytes()
@@ -488,32 +493,70 @@ def from_service(
         return any(k in s for k in ("unknown job id", "decompose service 404", "connection error",
                                     "reset by peer", "broken pipe", "unreachable"))
 
+    receipt_path = work / "remote-job.json"
+    identity = {"input": hashlib.sha256(img_bytes).hexdigest(), "service": base}
+    remote_id = None
+    durable = False
+    try:
+        receipt = json.loads(receipt_path.read_text())
+        if receipt.get("identity") == identity:
+            remote_id = receipt["job_id"]
+            durable = receipt.get("durable", False)
+    except (OSError, ValueError, KeyError):
+        pass
+    resume_pending = resume
+
     def _run_once() -> bytes:
-        # submit (short request) -> poll (each poll short, survives long inference behind NAT) -> result
-        job_id = _get("/decompose", data=img_bytes, want_json=True, t=120.0)["job_id"]
-        deadline = time.monotonic() + timeout
+        nonlocal remote_id, resume_pending, durable
+        if remote_id is None:
+            submitted = _get("/decompose", data=img_bytes, want_json=True, t=120.0)
+            remote_id = submitted["job_id"]
+            durable = submitted.get("checkpoint_protocol") == 1
+            temporary = receipt_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"identity": identity, "job_id": remote_id, "durable": durable}))
+            temporary.replace(receipt_path)
+        if on_status:
+            on_status({"job_id": remote_id, "status": "running"})
+        if resume_pending:
+            current = _get(f"/jobs/{remote_id}", want_json=True, t=30.0)
+            if current["status"] != "running":
+                suffix = "?stage=" + restart_stage if restart_stage else ""
+                _get(f"/jobs/{remote_id}/resume" + suffix, data=b"", want_json=True, t=30.0)
+            resume_pending = False
+        started = time.monotonic()
+        deadline = started + timeout
         while time.monotonic() < deadline:
             time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
-            status = _get(f"/jobs/{job_id}", want_json=True, t=30.0)
+            status = _get(f"/jobs/{remote_id}", want_json=True, t=30.0)
+            if on_status:
+                on_status({**status, "job_id": remote_id})
+            if automatic_timeout and status.get("stage_timeouts"):
+                budget = sum(float(v) for v in status["stage_timeouts"].values()) + 600
+                if math.isfinite(budget) and budget > 0:
+                    deadline = started + budget
             if status["status"] == "done":
                 break
-            if status["status"] == "error":
+            if status["status"] in {"error", "paused"}:
                 raise RuntimeError(
                     f"decompose failed on the service [{status.get('error_code') or 'inference_failed'}]: "
-                    f"{status.get('error')}"
+                    f"{status.get('error') or 'Paused; resume to produce PSD'}"
                 )
         else:
-            raise RuntimeError(f"decompose timed out after {timeout:.0f}s (job {job_id})")
-        return _get(f"/jobs/{job_id}/result", want_json=False, t=180.0)
+            raise RuntimeError(f"decompose timed out after {deadline - started:.0f}s (job {remote_id}); "
+                               "remote checkpoints remain available")
+        return _get(f"/jobs/{remote_id}/result", want_json=False, t=180.0)
 
-    # Retry the whole job if the service dropped it (a fresh service can restart once and lose the job
-    # map -> 404 "unknown job id"); a re-submit then succeeds.
+    # Retry transport against the same durable job; never silently repeat GPU inference.
     attempts = 3
     for attempt in range(attempts):
         try:
             psd_bytes = _run_once()
             break
         except RuntimeError as exc:
+            if "decompose service 404" in str(exc):
+                if durable:
+                    raise RuntimeError("Remote checkpoint job expired or unavailable; upload again explicitly") from exc
+                remote_id = None  # retain compatibility with pre-checkpoint services
             if _retryable(exc) and attempt < attempts - 1:
                 time.sleep(10.0)  # let the service/tunnel settle, then re-submit
                 continue

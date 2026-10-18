@@ -104,6 +104,9 @@
     <div class="card">
       <h2>2 · Pipeline</h2>
       <ul class="steps" id="steps"><li class="empty">Upload an image and hit “Run pipeline”.</li></ul>
+      <div id="depth-stages" class="hint"></div>
+      <button id="resume-job" hidden>Resume completed stages</button>
+      <button id="retry-depth" hidden>Retry Depth, then rebuild PSD</button>
       <div id="errbox"></div>
     </div>
 
@@ -201,7 +204,7 @@ $('#run').addEventListener('click',async()=>{
   const r=await fetch('/api/jobs?name='+encodeURIComponent(chosen.name),{method:'POST',body:chosen});
   const j=await r.json();
   if(!j.job_id){ $('#errbox').innerHTML='<div class="note">error: '+(j.error||'failed to start')+'</div>'; $('#run').disabled=false; return; }
-  jobId=j.job_id;
+  jobId=j.job_id; localStorage.setItem("image2live2d-job",jobId);
   clearInterval(pollTimer); pollTimer=setInterval(poll,500); poll();
 });
 
@@ -210,9 +213,35 @@ const ICON={ok:'✓',fail:'✕',skip:'–',pending:'',running:''};
 let stepTimer=null, runStart=0, runName=null;   // live timer for the in-progress step
 async function poll(){
   const r=await fetch('/api/jobs/'+jobId); const j=await r.json();
+  if(!r.ok){ clearInterval(pollTimer); $('#errbox').textContent=j.error||'Job expired'; return; }
   renderSteps(j.steps);
+  const d=j.decomposition||{}, stages=d.stages||{};
+  $('#depth-stages').textContent=['layerdiff','depth','psd'].filter(k=>stages[k]).map(k=>{
+    const s=stages[k], elapsed=s.started ? Math.max(0,(s.finished||Date.now()/1000)-s.started).toFixed(1)+'s' : '';
+    return k+': '+s.status+(s.reused?' (reused)':'')+' '+elapsed+(s.error?' — '+s.error:'');
+  }).join(' · ');
+  const canResume=j.status!=='running' && !!d.job_id && d.resumable!==false;
+  $('#resume-job').hidden=!canResume;
+  $('#retry-depth').hidden=!canResume || stages.layerdiff?.status!=='done';
   if(j.status==='done'){ clearInterval(pollTimer); stopTicker(); onDone(j); }
   else if(j.status==='error'){ clearInterval(pollTimer); stopTicker(); $('#errbox').innerHTML='<div class="note">✕ '+escapeHtml(j.error)+'</div>'; $('#run').disabled=false; }
+}
+async function resumeConversion(stage){
+  $('#resume-job').disabled=true; $('#retry-depth').disabled=true;
+  try{
+    const response=await fetch('/api/jobs/'+jobId+'/resume'+(stage?'?stage='+stage:''),{method:'POST'});
+    const body=await response.json();
+    if(!response.ok) throw new Error(body.error||'Resume failed');
+    $('#errbox').textContent=''; $('#resultcard').style.display='none'; $('#previewcard').style.display='none';
+    clearInterval(pollTimer); pollTimer=setInterval(poll,1000); await poll();
+  }catch(e){ $('#errbox').textContent=e.message; }
+  finally{ $('#resume-job').disabled=false; $('#retry-depth').disabled=false; }
+}
+$('#resume-job').addEventListener('click',()=>resumeConversion(null));
+$('#retry-depth').addEventListener('click',()=>resumeConversion('depth'));
+const savedJob=localStorage.getItem('image2live2d-job');
+if(savedJob && /^[a-f0-9]+$/.test(savedJob)){
+  jobId=savedJob; pollTimer=setInterval(poll,1000); poll();
 }
 function renderSteps(steps){
   const ul=$('#steps');
