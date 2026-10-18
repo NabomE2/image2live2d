@@ -48,7 +48,7 @@ ln -sf common/assets assets || true
 # Fetched from our public repo; each is non-fatal (|| echo) so an upstream shape change just leaves us
 # unpatched rather than aborting boot. PATCH_REF selects the branch (default main).
 PATCH_REF="$(meta patch-ref)"; PATCH_REF="${PATCH_REF:-main}"
-PATCH_BASE="https://raw.githubusercontent.com/Wzhang3912/image2live2d/${PATCH_REF}/service/seethrough/patches"
+PATCH_BASE="https://raw.githubusercontent.com/NabomE2/image2live2d/${PATCH_REF}/service/seethrough/patches"
 apply_patch() {  # <patcher-file> <target-relpath> <label>
   if curl -fsSL "$PATCH_BASE/$1" -o "/tmp/$1"; then
     python3 "/tmp/$1" "$SEE_THROUGH_DIR/$2" || echo "WARNING: $3 not applied (anchor not found?) — serving unpatched"
@@ -58,6 +58,8 @@ apply_patch() {  # <patcher-file> <target-relpath> <label>
 }
 apply_patch guard_empty_head_crop.py  common/utils/inference_utils.py  "empty-head-crop guard"
 apply_patch guard_missing_part_pngs.py common/utils/io_utils.py         "missing-tag-PNG guard"
+
+apply_patch preserve_mouth_rgb.py common/utils/inference_utils.py      "mouth RGB preservation"
 
 # 2. Python env + deps (base PSD path only; skip detectron2/mmdet/SAM2 install-hell tiers)
 python3.12 -m venv "$VENV"

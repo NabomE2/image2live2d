@@ -23,10 +23,11 @@ without Pillow or any ML extras; ``build_mesh`` is the thin Pillow-backed wrappe
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
+from math import ceil, floor
 
-from ..types import Layer, LayerStack
 from ...irr.schema import Mesh, Vec2
+from ..types import Layer, LayerStack
 
 # (u, v) in [0, 1], v down -> alpha 0..255.
 AlphaSampler = Callable[[float, float], int]
@@ -54,6 +55,7 @@ def grid_mesh(
     uv_rect: UvRect = FULL_UV,
     alpha_threshold: int = DEFAULT_ALPHA_THRESHOLD,
     cell_samples: int = DEFAULT_CELL_SAMPLES,
+    coverage: Callable[[float, float, float, float], bool] | None = None,
 ) -> Mesh:
     """Build a grid ``Mesh`` over a model-space ``rect``, keeping only alpha-covered cells.
 
@@ -61,7 +63,8 @@ def grid_mesh(
     region that maps onto ``rect`` (defaults to the whole texture). ``alpha_at(u, v)`` samples the
     layer texture with ``u`` left->right and ``v`` top->bottom over [0, 1].
 
-    Cells are kept when any of their ``cell_samples`` x ``cell_samples`` interior probes is at least
+    When supplied, ``coverage(u0, v0, u1, v1)`` tests the entire cell footprint.
+    Otherwise cells are kept when any of their ``cell_samples`` x ``cell_samples`` interior probes is at least
     ``alpha_threshold``; unused lattice nodes are dropped and indices remapped. If *no* cell is
     covered (a fully transparent region — a bug upstream) the full grid is kept so we never emit a
     degenerate mesh; ``validate.lint`` flags that case.
@@ -88,6 +91,10 @@ def grid_mesh(
         return u, v
 
     def cell_covered(ci: int, cj: int) -> bool:
+        if coverage is not None:
+            left, bottom = probe_uv(ci, cj)
+            right, top = probe_uv(ci + 1, cj + 1)
+            return coverage(left, top, right, bottom)
         for s in range(cell_samples):
             uf = ci + (s + 0.5) / cell_samples
             for t in range(cell_samples):
@@ -207,7 +214,9 @@ def build_mesh(
     with Image.open(layer.texture_path) as img:
         rgba = img.convert("RGBA")
         width, height = rgba.size
-        alpha_px = rgba.getchannel("A").load()
+        alpha = rgba.getchannel("A")
+        alpha_px = alpha.load()
+        occupied = alpha.point([255 if a >= alpha_threshold else 0 for a in range(256)])
 
     def alpha_at(u: float, v: float) -> int:
         px = min(width - 1, max(0, int(u * width)))
@@ -219,14 +228,24 @@ def build_mesh(
     uv_rect: UvRect = FULL_UV
 
     if tighten:
-        box = alpha_bbox(lambda px, py: alpha_px[px, py], width, height, alpha_threshold)
+        # Geometry must retain every surviving alpha pixel, including connected 1px tips.
+        # Keep alpha_bbox's robust mass heuristic for synthesis/pivot callers only.
+        box = occupied.getbbox()
         if box is not None:
             px0, py0, px1, py1 = box
-            uv_rect = (px0 / width, py0 / height, (px1 + 1) / width, (py1 + 1) / height)
+            uv_rect = (px0 / width, py0 / height, px1 / width, py1 / height)
             rect = _subrect(rect, uv_rect)
 
+    def coverage(left: float, top: float, right: float, bottom: float) -> bool:
+        # Outward rounding includes texel footprints crossing cell edges. Pillow scans in C;
+        # each pixel is visited roughly once across all cells, without a full integral-image buffer.
+        box = (max(0, floor(left * width)), max(0, floor(top * height)),
+               min(width, ceil(right * width)), min(height, ceil(bottom * height)))
+        return occupied.crop(box).getbbox() is not None
+
     return grid_mesh(
-        layer.id, rect, alpha_at, grid=grid, uv_rect=uv_rect, alpha_threshold=alpha_threshold
+        layer.id, rect, alpha_at, grid=grid, uv_rect=uv_rect, alpha_threshold=alpha_threshold,
+        coverage=coverage,
     )
 
 
