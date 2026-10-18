@@ -71,6 +71,7 @@
 <body>
 <header>
   <h1>image2Live2D</h1>
+  <a href="/editor">저장된 편집 프로젝트</a>
   <span class="sub">flat image &rarr; riggable .inp &mdash; decompose, rig, physics, preview</span>
   <span id="mode" style="margin-left:auto"></span>
 </header>
@@ -281,6 +282,20 @@ function onDone(j){
     '<div><b>'+(r.physics||0)+'</b>physics</div>'+notes;
   $('#dl').href='/api/jobs/'+jobId+'/download';
   prepareVtube(jobId);
+  let editButton=document.getElementById('detail-edit');
+  if(!editButton){ editButton=document.createElement('button'); editButton.id='detail-edit';
+    editButton.textContent='디테일 편집'; $('#resultcard').appendChild(editButton); }
+  editButton.disabled=false;
+  editButton.onclick=async()=>{
+    editButton.disabled=true;
+    try{
+      const response=await fetch('/api/jobs/'+jobId+'/editor-project',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:'{}'});
+      const project=await response.json();
+      if(!response.ok)throw new Error(project.error);
+      location.href='/editor?project='+project.id;
+    }catch(error){alert('편집 프로젝트 생성 실패: '+error.message);editButton.disabled=false;}
+  };
   loadLive();
 }
 

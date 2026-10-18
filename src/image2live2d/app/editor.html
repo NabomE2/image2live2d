@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Live2D 입 마스크 편집</title>
+<style>
+body{font:15px/1.6 system-ui;margin:0;color:#202536;background:#f5f6fa}header,main{padding:18px;max-width:1400px;margin:auto}header{display:flex;gap:20px;align-items:center}h1{font-size:22px}section{background:white;padding:16px;border-radius:12px;margin-bottom:14px}button,select,input{font:inherit}button,select{padding:8px;margin:4px;border:1px solid #bbc5d8;border-radius:6px;background:white}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}button.primary{background:#315adb;color:white}label{display:inline-block;margin:5px} .views{display:grid;grid-template-columns:1fr 1fr;gap:16px}.view{min-width:0}canvas{width:100%;height:460px;touch-action:none;border:1px solid #ccd1dc}.checker{background-color:#fff;background-image:conic-gradient(#ddd 25%,transparent 0 50%,#ddd 0 75%,transparent 0);background-size:20px 20px}.white{background:white}.black{background:black}.hint{color:#526078;font-size:13px}#status{white-space:pre-wrap}#error{color:#a01a25}a{color:#244db2}@media(max-width:720px){.views{grid-template-columns:1fr}canvas{height:340px}}
+</style></head><body>
+<header><a href="/">← 생성 화면</a><h1>Live2D 입 마스크 편집</h1></header>
+<main>
+<section><label>프로젝트 <select id="projects"><option value="">프로젝트 선택</option></select></label><button id="reload">목록 새로 고침</button>
+<p class="hint">생성 완료 화면의 ‘디테일 편집’으로 프로젝트를 보존합니다. 저장된 프로젝트는 앱 재시작과 임시 작업 정리 후에도 유지됩니다.</p></section>
+<div id="workspace" hidden>
+<section><label>파츠 <select id="parts"></select></label><label>버전 <select id="revisions"></select></label><button id="restore">선택 버전으로 복원</button><button id="download">선택 버전 ZIP 다운로드</button>
+<label>저장된 초안 <select id="drafts"><option value="">초안 선택</option></select></label><button id="resume-draft">초안 다시 열기</button>
+<p id="project-info" class="hint"></p></section>
+<section>
+<label>도구 <select id="tool"><option value="erase">지우기</option><option value="restore">원본 복원</option><option value="pan">화면 이동</option></select></label>
+<label>크기(원본 px) <input id="radius" type="range" min="1" max="128" value="12"><span id="radius-value">12</span></label>
+<label>경도 <input id="hardness" type="range" min="0" max="1" step="0.05" value="0.8"></label>
+<label>배경 <select id="background"><option value="checker">투명 격자</option><option value="white">흰색</option><option value="black">검정</option></select></label>
+<label><input type="checkbox" id="alpha">알파 보기</label><button id="fit">화면에 맞추기</button>
+<p class="hint">휠: 확대·축소 · 이동 도구 또는 Shift+드래그: 화면 이동. 입 파츠만 편집 가능하며 파츠 단독 이미지로 비교합니다. 브러시 크기는 반지름입니다.</p>
+<div class="views"><div class="view"><b>생성 원본 (보존됨)</b><canvas id="original" class="checker"></canvas></div><div class="view"><b>선택 버전 / 편집 초안</b><canvas id="edited" class="checker"></canvas></div></div>
+<button id="apply" class="primary" disabled>비교 확인 후 승인·새 버전 저장</button><button id="reset">초안 닫기 / 현재 버전 열기</button>
+<p class="hint">편집은 alpha만 변경합니다. 원본 RGB·메시·UV·키폼은 유지하며 LayerDiff·Depth는 실행하지 않습니다. 이 화면은 파츠 비교이며 실제 Cubism 움직임 품질은 미검증입니다.</p>
+</section></div>
+<section><div id="status" role="status">프로젝트를 선택하세요.</div><div id="error" role="alert"></div></section>
+</main><script src="/editor.js"></script></body></html>

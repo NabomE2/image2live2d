@@ -286,3 +286,10 @@ reusing LayerDiff. See [checkpoint settings and retention](service/seethrough/CH
 [품질 진단 가이드](docs/QUALITY_DIAGNOSTICS.md)를 참고하세요.
 `python -m image2live2d.core.qa.visual --help`로 오프라인 보고서를 생성할 수 있습니다.
 GPU 추론 설정을 변경하지 않으며 실제 Cubism/VTube Studio 품질 검증은 별도로 필요합니다.
+
+### 웹 디테일 편집
+
+생성 완료 화면의 **디테일 편집**에서 입 알파를 브러시로 수정하고 원본과 비교할 수 있습니다.
+원본을 보존한 별도 프로젝트와 버전으로 저장하며, GPU 재추론 없이 모델 ZIP을 다시 받습니다.
+서버 재시작 후에도 `/editor`에서 프로젝트를 열 수 있습니다.
+[사용법·저장 정책·지원 범위](DETAIL_EDITOR.md)를 참고하세요.
