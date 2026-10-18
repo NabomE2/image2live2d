@@ -39,7 +39,8 @@ class Live2DEmitter(Emitter):
     def emit(self, rig: Rig, out_dir: Path) -> Path:
         return self.build(rig, out_dir).model3_path
 
-    def build(self, rig: Rig, out_dir: str | Path) -> Live2DBundle:
+    def build(self, rig: Rig, out_dir: str | Path, *,
+              diagnostics_dir: str | Path | None = None) -> Live2DBundle:
         from .moc3_binary import write_moc3
         from .moc3_emit import build_atlas, rig_to_moc3
 
@@ -61,7 +62,14 @@ class Live2DEmitter(Emitter):
             atlas.save(out / "textures/atlas.png")
             textures = ["textures/atlas.png"]
             data = write_moc3(rig_to_moc3(rig, atlas_uv=uv_remap))
+            if diagnostics_dir is not None:
+                from ...core.qa.visual import generate_report
+
+                generate_report(rig, self.asset_root, diagnostics_dir,
+                                atlas=atlas, uv_remap=uv_remap)
         else:
+            if diagnostics_dir is not None:
+                raise ValueError("Atlas diagnostics require the default Live2D writer")
             # Preserve the explicit writer extension point and its per-texture numbering.
             textures = []
             for i, tex in enumerate(rig.textures):

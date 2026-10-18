@@ -279,3 +279,10 @@ Uploads and stage checkpoints survive container recreation in job volumes and ex
 after 7 inactive days by default. The UI can resume a failed job or retry Depth while
 reusing LayerDiff. See [checkpoint settings and retention](service/seethrough/CHECKPOINTS.md).
 `down -v` deletes retained jobs as well as models. This setup is intended for personal local use.
+
+### SD 캐릭터 품질 진단
+
+외곽선·입 색상·눈 중복 문제의 단계별 CPU 진단과 합성 회귀 비교는
+[품질 진단 가이드](docs/QUALITY_DIAGNOSTICS.md)를 참고하세요.
+`python -m image2live2d.core.qa.visual --help`로 오프라인 보고서를 생성할 수 있습니다.
+GPU 추론 설정을 변경하지 않으며 실제 Cubism/VTube Studio 품질 검증은 별도로 필요합니다.

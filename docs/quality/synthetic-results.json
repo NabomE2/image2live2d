@@ -1,0 +1,82 @@
+{
+  "hair_tip": {
+    "before": {
+      "alpha_pixels": 5040,
+      "missing_pixels": 40,
+      "coverage": 0.9920634920634921,
+      "triangles": 392
+    },
+    "after": {
+      "alpha_pixels": 5040,
+      "missing_pixels": 0,
+      "coverage": 1.0,
+      "triangles": 236
+    }
+  },
+  "eyelash": {
+    "before": {
+      "alpha_pixels": 5030,
+      "missing_pixels": 80,
+      "coverage": 0.9840954274353877,
+      "triangles": 364
+    },
+    "after": {
+      "alpha_pixels": 5030,
+      "missing_pixels": 0,
+      "coverage": 1.0,
+      "triangles": 252
+    }
+  },
+  "ornament": {
+    "before": {
+      "alpha_pixels": 5004,
+      "missing_pixels": 0,
+      "coverage": 1.0,
+      "triangles": 226
+    },
+    "after": {
+      "alpha_pixels": 5004,
+      "missing_pixels": 0,
+      "coverage": 1.0,
+      "triangles": 226
+    }
+  },
+  "thin_line": {
+    "before": {
+      "alpha_pixels": 5101,
+      "missing_pixels": 151,
+      "coverage": 0.9703979611840815,
+      "triangles": 364
+    },
+    "after": {
+      "alpha_pixels": 5101,
+      "missing_pixels": 0,
+      "coverage": 1.0,
+      "triangles": 236
+    }
+  },
+  "soft_edge": {
+    "before": {
+      "alpha_pixels": 5040,
+      "missing_pixels": 40,
+      "coverage": 0.9920634920634921,
+      "triangles": 392
+    },
+    "after": {
+      "alpha_pixels": 5040,
+      "missing_pixels": 0,
+      "coverage": 1.0,
+      "triangles": 236
+    }
+  },
+  "legacy_1024": {
+    "median_seconds": 0.10631664599350188,
+    "runs": 5,
+    "scope": "local CPU, synthetic texture; not GPU inference"
+  },
+  "pixel_coverage_1024": {
+    "median_seconds": 0.014857506001135334,
+    "runs": 5,
+    "scope": "local CPU, synthetic texture; not GPU inference"
+  }
+}

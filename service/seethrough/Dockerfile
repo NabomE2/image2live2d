@@ -24,7 +24,7 @@ RUN pip install --upgrade pip && \
 
 COPY app.py pipeline.py model_manager.py process_runner.py staged_inference.py low_vram.py low_vram_metrics.py unet_memory.py checkpoints.py telemetry.py /opt/
 COPY patches /opt/patches
-RUN python /opt/patches/guard_empty_head_crop.py common/utils/inference_utils.py && python /opt/patches/guard_missing_part_pngs.py common/utils/io_utils.py
+RUN python /opt/patches/guard_empty_head_crop.py common/utils/inference_utils.py && python /opt/patches/guard_missing_part_pngs.py common/utils/io_utils.py && python /opt/patches/preserve_mouth_rgb.py common/utils/inference_utils.py
 RUN useradd --create-home --uid 1000 app && mkdir /models /jobs && chown app:app /models /jobs
 USER app
 WORKDIR /opt
