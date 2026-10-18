@@ -477,6 +477,13 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
         job.stack = ctx["stack"]
 
     def s_meshes():
+        # Preserve decomposition before prepare_meshes mutates/synthesizes its parts.
+        normalized = work / "normalized"
+        if normalized.exists():
+            shutil.rmtree(normalized)
+        normalized.mkdir()
+        for layer in ctx["stack"].layers:
+            shutil.copyfile(layer.texture_path, normalized / Path(layer.texture_path).name)
         # the full prepare phase (synth + repair), identical to the emitted rig — not a subset, or the
         # browser preview drifts from the deliverable (bundled limbs, no mouth cavity, buried brows)
         ctx["meshes"] = prepare_meshes(ctx["stack"])
@@ -732,6 +739,10 @@ def _make_handler():
             self._send(code, json.dumps(obj).encode(), "application/json")
 
         def do_GET(self):  # noqa: N802
+            from .editor_http import dispatch
+
+            if dispatch(self, "GET"):
+                return
             u = urlparse(self.path)
             path = u.path
             if path == "/healthz":
@@ -872,6 +883,10 @@ def _make_handler():
             self._send(404, b"not found", "text/plain")
 
         def do_POST(self):  # noqa: N802
+            from .editor_http import dispatch
+
+            if dispatch(self, "POST"):
+                return
             u = urlparse(self.path)
             if u.path == "/api/setup/models":
                 if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
