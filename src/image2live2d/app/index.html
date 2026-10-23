@@ -71,7 +71,7 @@
 <body>
 <header>
   <h1>image2Live2D</h1>
-  <a href="/editor">저장된 편집 프로젝트</a>
+  <a href="/review">검수 프로젝트</a> <a href="/editor">저장된 편집 프로젝트</a>
   <span class="sub">flat image &rarr; riggable .inp &mdash; decompose, rig, physics, preview</span>
   <span id="mode" style="margin-left:auto"></span>
 </header>
@@ -87,6 +87,7 @@
 </section>
 <div class="wrap">
   <!-- LEFT: upload -->
+<label>실행 모드 <select id="generation-mode"><option value="auto">자동 생성</option><option value="manual">수동 검수 후 리깅</option></select></label>
   <div>
     <div class="card">
       <h2>1 · Upload</h2>
@@ -202,7 +203,7 @@ $('#run').addEventListener('click',async()=>{
   $('#dl-vtube').disabled=true; $('#vtube-status').textContent='';
   $('#run').disabled=true; $('#resultcard').style.display='none'; $('#previewcard').style.display='none';
   $('#errbox').innerHTML='';
-  const r=await fetch('/api/jobs?name='+encodeURIComponent(chosen.name),{method:'POST',body:chosen});
+  const r=await fetch('/api/jobs?name='+encodeURIComponent(chosen.name)+'&mode='+$('#generation-mode').value,{method:'POST',body:chosen});
   const j=await r.json();
   if(!j.job_id){ $('#errbox').innerHTML='<div class="note">error: '+(j.error||'failed to start')+'</div>'; $('#run').disabled=false; return; }
   jobId=j.job_id; localStorage.setItem("image2live2d-job",jobId);
@@ -224,6 +225,7 @@ async function poll(){
   const canResume=j.status!=='running' && !!d.job_id && d.resumable!==false;
   $('#resume-job').hidden=!canResume;
   $('#retry-depth').hidden=!canResume || stages.layerdiff?.status!=='done';
+  if(j.status==='review_required'){ clearInterval(pollTimer); stopTicker(); location.href='/review?project='+j.review_project; return; }
   if(j.status==='done'){ clearInterval(pollTimer); stopTicker(); onDone(j); }
   else if(j.status==='error'){ clearInterval(pollTimer); stopTicker(); $('#errbox').innerHTML='<div class="note">✕ '+escapeHtml(j.error)+'</div>'; $('#run').disabled=false; }
 }
