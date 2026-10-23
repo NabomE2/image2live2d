@@ -1,0 +1,12 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><title>Pre-Rigging Studio</title>
+<style>
+body{font:16px system-ui;background:#171b25;color:#eee;margin:24px}a{color:#a9c9ff}button,select{font:inherit;padding:8px;margin:5px}section{display:flex;gap:20px}figure{margin:0;flex:1;min-width:0}img{width:100%;max-height:70vh;object-fit:contain;background:repeating-conic-gradient(#444 0% 25%,#666 0% 50%) 0/20px 20px}pre{white-space:pre-wrap}#error{color:#ffb4b4}aside{padding:12px;background:#242c3d}
+</style>
+<a href="/">생성 화면</a><h1>Pre-Rigging Studio · 검수 준비실</h1>
+<label>저장된 프로젝트 <select id="projects"></select></label><button id="reload">목록 새로고침</button>
+<div id="workspace" hidden>
+<p id="status"></p><aside>승인 전에는 메시·리깅을 실행하지 않습니다. 승인 후 기존 자동 준비 정책에 따라 누락 파츠 합성(구강 등), 팔다리 분할·역할 보정, 얼굴·다리·장신구 순서 보정이 수행됩니다. 현재는 검수 전용이며 파츠를 수정하지 않습니다.</aside>
+<p><label>파츠 <select id="parts"></select></label><label>표시 <select id="view"><option value="rgba">투명 격자</option><option value="rgb">RGB</option><option value="alpha">알파</option></select></label></p>
+<section><figure><figcaption>업로드 원본 (캔버스 정렬 차이가 있을 수 있음)</figcaption><img id="source" alt="원본"><p id="source-note"></p></figure><figure><figcaption>정규화 파츠 / 전체 합성</figcaption><img id="result" alt="분해 결과"></figure></section>
+<p><button id="approve">승인 후 리깅 시작</button><a id="download" hidden>VTube Studio ZIP 다운로드</a></p>
+<pre id="details"></pre></div><p id="error" role="alert"></p><script src="/review.js"></script></html>

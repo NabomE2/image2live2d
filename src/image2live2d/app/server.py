@@ -141,6 +141,8 @@ class _Job:
     worker_active: bool = False
     resume_remote: bool = False
     restart_stage: str | None = None
+    mode: str = "auto"
+    review_project: str | None = None
     live2d_lock: object = field(default_factory=threading.Lock)
 
     def public(self) -> dict:
@@ -149,7 +151,7 @@ class _Job:
             "steps": [{"name": s.name, "status": s.status, "seconds": round(s.seconds, 2)}
                       for s in self.steps],
             "result": self.result, "has_inp": bool(self.inp_bytes),
-            "decomposition": self.decomposition,
+            "decomposition": self.decomposition, "mode": self.mode, "review_project": self.review_project,
         }
 
 
@@ -322,7 +324,8 @@ def _persist_job(job):
     if not job.work or not job.filename:
         return
     record = {"name": job.name, "filename": job.filename, "decomposition": job.decomposition,
-              "updated": time.time(), "status": job.status}
+              "updated": time.time(), "status": job.status,
+              "mode": job.mode, "review_project": job.review_project}
     temporary = job.work / "job.tmp"
     with temporary.open("w") as stream:
         json.dump(record, stream)
@@ -345,11 +348,13 @@ def _cleanup_web_jobs():
                 _JOBS.pop(path.parent.name, None)
 
 
-def start_job(data: bytes, filename: str) -> str:
+def start_job(data: bytes, filename: str, mode="auto") -> str:
     """Persist the source/remote receipt so a service restart does not lose a GPU job."""
+    if mode not in {"auto", "manual"}:
+        raise ValueError("Unknown generation mode")
     _cleanup_web_jobs()
     jid = uuid.uuid4().hex[:12]
-    job = _Job(id=jid, name=Path(filename).stem or "model", source=data, filename=filename, worker_active=True)
+    job = _Job(id=jid, name=Path(filename).stem or "model", source=data, filename=filename, worker_active=True, mode=mode)
     job.work = _web_root() / jid
     job.work.mkdir(parents=True)
     (job.work / "upload").write_bytes(data)
@@ -375,7 +380,10 @@ def get_job(jid: str) -> "_Job | None":
             job = _Job(id=jid, name=saved["name"], filename=saved["filename"], work=work,
                        source=(work / "upload").read_bytes(), status="error",
                        error="App restarted. Resume to reuse available GPU checkpoints.",
-                       decomposition=saved.get("decomposition", {}))
+                       decomposition=saved.get("decomposition", {}), mode=saved.get("mode", "auto"),
+                       review_project=saved.get("review_project"))
+            if job.review_project:
+                job.status, job.error = "review_required", ""
             _JOBS[jid] = job
             return job
         except (OSError, ValueError, KeyError):
@@ -388,6 +396,8 @@ def resume_job(jid, stage=None):
     job = get_job(jid)
     if job is None:
         raise ValueError("Job not found or retention expired")
+    if job.review_project:
+        raise ValueError("Use the saved review project to approve CPU rigging")
     with _LOCK:
         if job.status == "running" or job.worker_active:
             raise ValueError("Job is already running")
@@ -409,7 +419,7 @@ def resume_job(jid, stage=None):
     return jid
 
 
-def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
+def _run_pipeline(job: _Job, data: bytes, filename: str, *, review_context=None) -> None:
     """Execute the pipeline stage-by-stage, timing each and recording pass/fail. Caches artifacts so
     the preview/download endpoints can serve from this job."""
     from ..backends.nijilive import NijiliveEmitter
@@ -423,6 +433,10 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
     ext = Path(filename).suffix.lower()
     work = job.work
     ctx: dict = {}
+    if review_context is not None:
+        db, pid, attempt = review_context
+        ctx["stack"] = db.load_approved(pid, attempt, work / "layers")
+        job.stack = ctx["stack"]
 
     def step(name: str, fn):
         s = _Step(name=name, status="running")
@@ -477,6 +491,8 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
         job.stack = ctx["stack"]
 
     def s_meshes():
+        if job.mode == "manual" and review_context is None:
+            raise ValueError("Manual rigging requires a validated review approval")
         # Preserve decomposition before prepare_meshes mutates/synthesizes its parts.
         normalized = work / "normalized"
         if normalized.exists():
@@ -539,7 +555,8 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
         }
 
     # Managed GPU: for a flat image with no static URL, auto start the VM + tunnel, then tear down.
-    gpu = _gpu_manager() if ext in _FLAT_IMAGE and not _decompose_config()[0] else None
+    gpu = (_gpu_manager() if review_context is None and ext in _FLAT_IMAGE
+           and not _decompose_config()[0] else None)
 
     def s_start_gpu():
         ctx["gpu"] = gpu
@@ -556,12 +573,21 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
         ("Author rig", s_rig), ("Physics", s_physics), ("Idle animation", s_animation),
         ("Emit .inp", s_emit), ("QA + audit", s_qa),
     ]
+    if review_context is not None:
+        core = core[1:]
     pipeline = ([("Start GPU", s_start_gpu)] + core + [("Stop GPU", s_stop_gpu)]) if gpu else core
     try:
         for name, fn in pipeline:
             step(name, fn)
+            if name == "Decompose" and job.mode == "manual":
+                from .review import store
+                project = store().create(job)
+                job.review_project = project["id"]
+                job.status = "review_required"
+                return
         job.status = "done"
     except Exception:
+        job.status = "error"
         for s in job.steps:
             if s.status == "pending":
                 s.status = "skip"
@@ -740,7 +766,10 @@ def _make_handler():
 
         def do_GET(self):  # noqa: N802
             from .editor_http import dispatch
+            from .review_http import dispatch as review_dispatch
 
+            if review_dispatch(self, "GET"):
+                return
             if dispatch(self, "GET"):
                 return
             u = urlparse(self.path)
@@ -884,7 +913,10 @@ def _make_handler():
 
         def do_POST(self):  # noqa: N802
             from .editor_http import dispatch
+            from .review_http import dispatch as review_dispatch
 
+            if review_dispatch(self, "POST"):
+                return
             if dispatch(self, "POST"):
                 return
             u = urlparse(self.path)
@@ -920,7 +952,7 @@ def _make_handler():
                         self._json(409, {"error": "Finish local GPU setup and download the models first."})
                         return
                 try:
-                    jid = start_job(data, filename)
+                    jid = start_job(data, filename, (qs.get("mode") or ["auto"])[0])
                     self._json(200, {"job_id": jid})
                 except Exception as exc:  # noqa: BLE001
                     self._json(400, {"error": str(exc)})
